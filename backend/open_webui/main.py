@@ -592,6 +592,8 @@ from open_webui.env import (
     BYPASS_MODEL_ACCESS_CONTROL,
     RESET_CONFIG_ON_START,
     ENABLE_VERSION_UPDATE_CHECK,
+    WEBUI_GITHUB_RELEASES_LATEST_API_URL,
+    WEBUI_GITHUB_URL,
     ENABLE_OTEL,
     EXTERNAL_PWA_MANIFEST_URL,
     AIOHTTP_CLIENT_SESSION_SSL,
@@ -693,7 +695,7 @@ if LOG_FORMAT != "json":
 
 v{VERSION} - building the best AI user interface.
 {f"Commit: {WEBUI_BUILD_HASH}" if WEBUI_BUILD_HASH != "dev-build" else ""}
-https://github.com/open-webui/open-webui
+{WEBUI_GITHUB_URL}
 """)
 
 
@@ -2539,14 +2541,19 @@ async def get_app_latest_release_version(user=Depends(get_verified_user)):
         timeout = aiohttp.ClientTimeout(total=1)
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.get(
-                "https://api.github.com/repos/open-webui/open-webui/releases/latest",
+                WEBUI_GITHUB_RELEASES_LATEST_API_URL,
                 ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as response:
                 response.raise_for_status()
                 data = await response.json()
-                latest_version = data["tag_name"]
+                latest_version = str(data.get("tag_name", "")).strip()
+                if latest_version.lower().startswith("v"):
+                    latest_version = latest_version[1:]
 
-                return {"current": VERSION, "latest": latest_version[1:]}
+                return {
+                    "current": VERSION,
+                    "latest": latest_version if latest_version else VERSION,
+                }
     except Exception as e:
         log.debug(e)
         return {"current": VERSION, "latest": VERSION}

@@ -1038,6 +1038,26 @@ SENTENCE_TRANSFORMERS_CROSS_ENCODER_SIGMOID_ACTIVATION_FUNCTION = (
 ENABLE_VERSION_UPDATE_CHECK = (
     os.environ.get("ENABLE_VERSION_UPDATE_CHECK", "true").lower() == "true"
 )
+
+WEBUI_GITHUB_REPOSITORY = os.environ.get(
+    "WEBUI_GITHUB_REPOSITORY", "mehhovcki-dev/awesome-webui"
+).strip()
+if WEBUI_GITHUB_REPOSITORY == "":
+    WEBUI_GITHUB_REPOSITORY = "mehhovcki-dev/awesome-webui"
+
+WEBUI_GITHUB_URL = os.environ.get(
+    "WEBUI_GITHUB_URL", f"https://github.com/{WEBUI_GITHUB_REPOSITORY}"
+).rstrip("/")
+
+WEBUI_GITHUB_RELEASES_URL = os.environ.get(
+    "WEBUI_GITHUB_RELEASES_URL", f"{WEBUI_GITHUB_URL}/releases"
+).rstrip("/")
+
+WEBUI_GITHUB_RELEASES_LATEST_API_URL = os.environ.get(
+    "WEBUI_GITHUB_RELEASES_LATEST_API_URL",
+    f"https://api.github.com/repos/{WEBUI_GITHUB_REPOSITORY}/releases/latest",
+).strip()
+
 OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "false").lower() == "true"
 
 if OFFLINE_MODE:

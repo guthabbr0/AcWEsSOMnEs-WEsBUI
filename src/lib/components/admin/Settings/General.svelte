@@ -16,7 +16,13 @@
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { WEBUI_BUILD_HASH, WEBUI_VERSION } from '$lib/constants';
+	import {
+		WEBUI_BUILD_HASH,
+		WEBUI_GITHUB_REPO,
+		WEBUI_GITHUB_URL,
+		WEBUI_RELEASES_URL,
+		WEBUI_VERSION
+	} from '$lib/constants';
 	import { banners as _banners, config, showChangelog } from '$lib/stores';
 	import type { Banner } from '$lib/types';
 	import { compareVersion } from '$lib/utils';
@@ -162,7 +168,7 @@
 
 									{#if $config?.features?.enable_version_update_check}
 										<a
-											href="https://github.com/open-webui/open-webui/releases/tag/v{version.latest}"
+											href={`${WEBUI_RELEASES_URL}/tag/v${version.latest}`}
 											target="_blank"
 										>
 											{updateAvailable === null
@@ -235,10 +241,10 @@
 									/>
 								</a>
 
-								<a href="https://github.com/open-webui/open-webui" target="_blank">
+								<a href={WEBUI_GITHUB_URL} target="_blank">
 									<img
 										alt="Github Repo"
-										src="https://img.shields.io/github/stars/open-webui/open-webui?style=social&label=Star us on Github"
+										src={`https://img.shields.io/github/stars/${WEBUI_GITHUB_REPO}?style=social&label=Star%20us%20on%20Github`}
 									/>
 								</a>
 							</div>

@@ -11,7 +11,7 @@
 
 	import { showSettings, mobile, showSidebar, showShortcuts, user, config } from '$lib/stores';
 
-	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, WEBUI_RELEASES_URL } from '$lib/constants';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import ArchiveBox from '$lib/components/icons/ArchiveBox.svelte';
@@ -433,7 +433,7 @@
 					<!-- Releases -->
 					<DropdownMenu.Item
 						as="a"
-						href="https://github.com/open-webui/open-webui/releases"
+						href={WEBUI_RELEASES_URL}
 						target="_blank"
 						draggable="false"
 						class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"

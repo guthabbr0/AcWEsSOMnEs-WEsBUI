@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { getVersionUpdates } from '$lib/apis';
 	import { getOllamaVersion } from '$lib/apis/ollama';
-	import { WEBUI_BUILD_HASH, WEBUI_VERSION } from '$lib/constants';
+	import {
+		WEBUI_BUILD_HASH,
+		WEBUI_GITHUB_REPO,
+		WEBUI_GITHUB_URL,
+		WEBUI_RELEASES_URL,
+		WEBUI_VERSION
+	} from '$lib/constants';
 	import { WEBUI_NAME, config, showChangelog } from '$lib/stores';
 	import { compareVersion } from '$lib/utils';
 	import { onMount, getContext } from 'svelte';
@@ -62,7 +68,7 @@
 
 						{#if $config?.features?.enable_version_update_check}
 							<a
-								href="https://github.com/open-webui/open-webui/releases/tag/v{version.latest}"
+								href={`${WEBUI_RELEASES_URL}/tag/v${version.latest}`}
 								target="_blank"
 							>
 								{updateAvailable === null
@@ -137,10 +143,10 @@
 					/>
 				</a>
 
-				<a href="https://github.com/open-webui/open-webui" target="_blank">
+				<a href={WEBUI_GITHUB_URL} target="_blank">
 					<img
 						alt="Github Repo"
-						src="https://img.shields.io/github/stars/open-webui/open-webui?style=social&label=Star us on Github"
+						src={`https://img.shields.io/github/stars/${WEBUI_GITHUB_REPO}?style=social&label=Star%20us%20on%20Github`}
 					/>
 				</a>
 			</div>
@@ -158,7 +164,7 @@
 					href="https://openwebui.com"
 					target="_blank"
 					class="underline">Open WebUI Inc.</a
-				> <a href="https://github.com/open-webui/open-webui/blob/main/LICENSE" target="_blank"
+				> <a href={`${WEBUI_GITHUB_URL}/blob/main/LICENSE`} target="_blank"
 					>All rights reserved.</a
 				>
 </pre>

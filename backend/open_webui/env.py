@@ -150,7 +150,15 @@ ENV = os.environ.get("ENV", "dev")
 FROM_INIT_PY = os.environ.get("FROM_INIT_PY", "False").lower() == "true"
 
 if FROM_INIT_PY:
-    PACKAGE_DATA = {"version": importlib.metadata.version("open-webui")}
+    package_version = None
+    for package_name in ("awesome-webui", "open-webui"):
+        try:
+            package_version = importlib.metadata.version(package_name)
+            break
+        except importlib.metadata.PackageNotFoundError:
+            continue
+
+    PACKAGE_DATA = {"version": package_version or "0.0.0"}
 else:
     try:
         PACKAGE_DATA = json.loads((BASE_DIR / "package.json").read_text())

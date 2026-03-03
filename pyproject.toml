@@ -1,5 +1,5 @@
 [project]
-name = "open-webui"
+name = "awesome-webui"
 description = "Awesome WebUI"
 authors = [
     { name = "Timothy Jaeryang Baek", email = "tim@openwebui.com" }
@@ -165,6 +165,7 @@ all = [
 
 [project.scripts]
 open-webui = "open_webui:app"
+awesome-webui = "open_webui:app"
 
 [build-system]
 requires = ["hatchling"]

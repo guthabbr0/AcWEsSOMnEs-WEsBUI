@@ -76,7 +76,7 @@
 	const updateIconHandler = async (iconName) => {
 		const res = await updateFolderById(localStorage.token, folder.id, {
 			meta: {
-				icon: iconName
+				icon: iconName ?? ''
 			}
 		}).catch((error) => {
 			toast.error(`${error}`);
@@ -84,7 +84,7 @@
 		});
 
 		if (res) {
-			folder.meta = { ...folder.meta, icon: iconName };
+			folder.meta = { ...folder.meta, icon: iconName ?? '' };
 
 			toast.success($i18n.t('Folder updated successfully'));
 
@@ -168,6 +168,7 @@
 			<EmojiPicker
 				showGifTab={false}
 				onClose={() => {}}
+				selected={folder?.meta?.icon ?? null}
 				onSubmit={(name) => {
 					console.log(name);
 					updateIconHandler(name);

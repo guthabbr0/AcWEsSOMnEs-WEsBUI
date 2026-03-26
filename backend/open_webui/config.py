@@ -339,6 +339,12 @@ ENABLE_OAUTH_SIGNUP = PersistentConfig(
     os.environ.get("ENABLE_OAUTH_SIGNUP", "False").lower() == "true",
 )
 
+OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE = PersistentConfig(
+    "OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE",
+    "oauth.refresh_token_include_scope",
+    os.environ.get("OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE", "False").lower() == "true",
+)
+
 ENABLE_OAUTH_LOGIN = PersistentConfig(
     "ENABLE_OAUTH_LOGIN",
     "oauth.enable_login",
@@ -445,6 +451,18 @@ GOOGLE_REDIRECT_URI = PersistentConfig(
     "oauth.google.redirect_uri",
     os.environ.get("GOOGLE_REDIRECT_URI", ""),
 )
+
+GOOGLE_OAUTH_AUTHORIZE_PARAMS = {}
+_google_oauth_authorize_params = os.environ.get("GOOGLE_OAUTH_AUTHORIZE_PARAMS", "")
+if _google_oauth_authorize_params:
+    try:
+        _parsed = json.loads(_google_oauth_authorize_params)
+        if isinstance(_parsed, dict):
+            GOOGLE_OAUTH_AUTHORIZE_PARAMS = _parsed
+        else:
+            log.warning("GOOGLE_OAUTH_AUTHORIZE_PARAMS must be a JSON object, ignoring")
+    except (json.JSONDecodeError, TypeError):
+        log.warning("GOOGLE_OAUTH_AUTHORIZE_PARAMS is not valid JSON, ignoring")
 
 MICROSOFT_OAUTH_ENABLED = PersistentConfig(
     "MICROSOFT_OAUTH_ENABLED",
@@ -582,6 +600,12 @@ OPENID_PROVIDER_URL = PersistentConfig(
     "OPENID_PROVIDER_URL",
     "oauth.oidc.provider_url",
     os.environ.get("OPENID_PROVIDER_URL", ""),
+)
+
+OPENID_END_SESSION_ENDPOINT = PersistentConfig(
+    "OPENID_END_SESSION_ENDPOINT",
+    "oauth.oidc.end_session_endpoint",
+    os.environ.get("OPENID_END_SESSION_ENDPOINT", ""),
 )
 
 OPENID_REDIRECT_URI = PersistentConfig(
@@ -1013,6 +1037,11 @@ def load_oauth_providers():
                     ),
                 },
                 redirect_uri=GOOGLE_REDIRECT_URI.value,
+                **(
+                    {"authorize_params": GOOGLE_OAUTH_AUTHORIZE_PARAMS}
+                    if GOOGLE_OAUTH_AUTHORIZE_PARAMS
+                    else {}
+                ),
             )
             return client
 
@@ -1264,13 +1293,14 @@ def load_oauth_providers():
     if SLACK_OAUTH_ENABLED.value and SLACK_CLIENT_ID.value:
         configured_providers.append("Slack")
 
-    if configured_providers and not OPENID_PROVIDER_URL.value:
+    if configured_providers and not OPENID_PROVIDER_URL.value and not OPENID_END_SESSION_ENDPOINT.value:
         provider_list = ", ".join(configured_providers)
         log.warning(
             f"⚠️  OAuth providers configured ({provider_list}) but OPENID_PROVIDER_URL not set - logout will not work!"
         )
         log.warning(
-            f"Set OPENID_PROVIDER_URL to your OAuth provider's OpenID Connect discovery endpoint to fix logout functionality."
+            f"Set OPENID_PROVIDER_URL to your OAuth provider's OpenID Connect discovery endpoint,"
+            f" or set OPENID_END_SESSION_ENDPOINT to a custom logout URL to fix logout functionality."
         )
 
 

@@ -2411,6 +2411,7 @@ async def get_app_config(request: Request):
                 "user_count": user_count,
                 "code": {
                     "engine": app.state.config.CODE_EXECUTION_ENGINE,
+                    "interpreter_engine": app.state.config.CODE_INTERPRETER_ENGINE,
                 },
                 "audio": {
                     "tts": {

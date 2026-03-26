@@ -46,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 from open_webui.config import (
     OPENID_PROVIDER_URL,
+    OPENID_END_SESSION_ENDPOINT,
     ENABLE_LDAP,
     ENABLE_PASSWORD_AUTH,
     OAUTH_PROVIDERS,
@@ -1119,6 +1120,17 @@ async def signout(
         response.delete_cookie("oauth_session_id")
 
         session = OAuthSessions.get_session_by_id(oauth_session_id, db=db)
+
+        if OPENID_END_SESSION_ENDPOINT.value:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": True,
+                    "redirect_url": OPENID_END_SESSION_ENDPOINT.value,
+                },
+                headers=response.headers,
+            )
+
         oauth_server_metadata_url = (
             request.app.state.oauth_manager.get_server_metadata_url(session.provider)
             if session

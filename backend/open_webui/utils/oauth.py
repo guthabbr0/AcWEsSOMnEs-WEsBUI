@@ -39,6 +39,7 @@ from open_webui.config import (
     ENABLE_OAUTH_SIGNUP,
     OAUTH_ALLOWED_LOGIN_PROVIDERS,
     OAUTH_ALLOWED_SIGNUP_PROVIDERS,
+    OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE,
     OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
     OAUTH_PROVIDERS,
     ENABLE_OAUTH_ROLE_MANAGEMENT,
@@ -125,6 +126,7 @@ auth_manager_config.ENABLE_OAUTH_LOGIN = ENABLE_OAUTH_LOGIN
 auth_manager_config.ENABLE_OAUTH_SIGNUP = ENABLE_OAUTH_SIGNUP
 auth_manager_config.OAUTH_ALLOWED_LOGIN_PROVIDERS = OAUTH_ALLOWED_LOGIN_PROVIDERS
 auth_manager_config.OAUTH_ALLOWED_SIGNUP_PROVIDERS = OAUTH_ALLOWED_SIGNUP_PROVIDERS
+auth_manager_config.OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE = OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE
 auth_manager_config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL = OAUTH_MERGE_ACCOUNTS_BY_EMAIL
 auth_manager_config.ENABLE_OAUTH_ROLE_MANAGEMENT = ENABLE_OAUTH_ROLE_MANAGEMENT
 auth_manager_config.ENABLE_OAUTH_GROUP_MANAGEMENT = ENABLE_OAUTH_GROUP_MANAGEMENT
@@ -853,6 +855,12 @@ class OAuthClientManager:
             }
             if hasattr(client, "client_secret") and client.client_secret:
                 refresh_data["client_secret"] = client.client_secret
+            if (
+                hasattr(client, "client_kwargs")
+                and client.client_kwargs.get("scope")
+                and getattr(self.app.state.config, "OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE", False)
+            ):
+                refresh_data["scope"] = client.client_kwargs["scope"]
 
             # Make refresh request
             async with aiohttp.ClientSession(trust_env=True) as session_http:
@@ -1147,6 +1155,12 @@ class OAuthManager:
             # Add client_secret if available (some providers require it)
             if hasattr(client, "client_secret") and client.client_secret:
                 refresh_data["client_secret"] = client.client_secret
+            if (
+                hasattr(client, "client_kwargs")
+                and client.client_kwargs.get("scope")
+                and auth_manager_config.OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE
+            ):
+                refresh_data["scope"] = client.client_kwargs["scope"]
 
             # Make refresh request
             async with aiohttp.ClientSession(trust_env=True) as session_http:
@@ -1991,4 +2005,3 @@ class OAuthManager:
             log.error(f"Failed to store OAuth session server-side: {e}")
 
         return response
-

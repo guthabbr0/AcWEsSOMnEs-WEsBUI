@@ -90,14 +90,16 @@
 			return;
 		}
 
-		const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
+		await user.update((currentUser) => {
+			if (!currentUser) {
+				return currentUser;
+			}
 
-		if (sessionUser) {
-			await user.set(sessionUser);
-		}
+			return {
+				...currentUser,
+				oauth: response.oauth ?? {}
+			};
+		});
 
 		toast.success(
 			$i18n.t('Disconnected {{provider}} from your account.', {
@@ -193,29 +195,31 @@
 	onMount(async () => {
 		handleOAuthLinkStatus();
 
-		const user = await getSessionUser(localStorage.token).catch((error) => {
+		const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
 			toast.error(`${error}`);
 			return null;
 		});
 
-		if (user) {
-			name = user?.name ?? '';
-			profileImageUrl = user?.profile_image_url ?? '';
-			bio = user?.bio ?? '';
+		if (sessionUser) {
+			await user.set(sessionUser);
 
-			_gender = user?.gender ?? '';
+			name = sessionUser?.name ?? '';
+			profileImageUrl = sessionUser?.profile_image_url ?? '';
+			bio = sessionUser?.bio ?? '';
+
+			_gender = sessionUser?.gender ?? '';
 			gender = _gender;
 
-			dateOfBirth = user?.date_of_birth ?? '';
+			dateOfBirth = sessionUser?.date_of_birth ?? '';
 		}
 
 		webhookUrl = $settings?.notifications?.webhook_url ?? '';
 
 		// Only fetch API key if the feature is enabled and user has permission
 		if (
-			user &&
+			sessionUser &&
 			($config?.features?.enable_api_keys ?? true) &&
-			(user?.role === 'admin' || (user?.permissions?.features?.api_keys ?? false))
+			(sessionUser?.role === 'admin' || (sessionUser?.permissions?.features?.api_keys ?? false))
 		) {
 			APIKey = await getAPIKey(localStorage.token).catch((error) => {
 				console.log(error);
@@ -348,7 +352,7 @@
 
 		<hr class="border-gray-50 dark:border-gray-850/30 my-4" />
 
-		{#if $config?.features.enable_login_form}
+		{#if $config?.features?.enable_login_form ?? true}
 			<div class="mt-2">
 				<UpdatePassword
 					showByDefault={$user?.password_change_required || $user?.has_password === false}

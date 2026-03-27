@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { DropdownMenu } from 'bits-ui';
-	import { createEventDispatcher, getContext, onMount, tick } from 'svelte';
+	import { createEventDispatcher, getContext, tick } from 'svelte';
 
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { goto } from '$app/navigation';
-	import { fade, slide } from 'svelte/transition';
+	import { fade } from 'svelte/transition';
 
 	import { getUsage } from '$lib/apis';
 	import { getSessionUser, userSignOut } from '$lib/apis/auths';
@@ -179,8 +179,9 @@
 								<span class="inline-flex size-2.5 rounded-full border-2 border-gray-500"></span>
 							{:else}
 								<span
-									class="relative inline-flex rounded-full size-2.5 {getPresenceOption().colorClass}"
-								/>
+									class="relative inline-flex rounded-full size-2.5 {getPresenceOption()
+										.colorClass}"
+								></span>
 							{/if}
 
 							<span class="text-xs"> {$i18n.t(getPresenceOption().label)} </span>
@@ -200,8 +201,7 @@
 									<span class="h-[1.5px] w-1.5 rounded-full bg-white"></span>
 								</span>
 							{:else if getPresenceState() === 'offline'}
-								<span
-									class="inline-flex size-3 rounded-full border-2 border-gray-500 shrink-0"
+								<span class="inline-flex size-3 rounded-full border-2 border-gray-500 shrink-0"
 								></span>
 							{:else}
 								<span
@@ -234,7 +234,8 @@
 													<span class="h-[1.5px] w-1.5 rounded-full bg-white"></span>
 												</span>
 											{:else if option.id === 'offline'}
-												<span class="inline-flex size-3 rounded-full border-2 border-gray-500"></span>
+												<span class="inline-flex size-3 rounded-full border-2 border-gray-500"
+												></span>
 											{:else}
 												<span class="inline-flex size-3 rounded-full {option.colorClass}"></span>
 											{/if}
@@ -329,8 +330,9 @@
 				<hr class=" border-gray-50/30 dark:border-gray-800/30 my-1.5 p-0" />
 			{/if}
 
-			<DropdownMenu.Item
+			<button
 				class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+				type="button"
 				on:click={async () => {
 					show = false;
 
@@ -346,10 +348,11 @@
 					<Settings className="w-5 h-5" strokeWidth="1.5" />
 				</div>
 				<div class=" self-center truncate">{$i18n.t('Settings')}</div>
-			</DropdownMenu.Item>
+			</button>
 
-			<DropdownMenu.Item
+			<button
 				class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+				type="button"
 				on:click={async () => {
 					show = false;
 
@@ -366,16 +369,22 @@
 					<ArchiveBox className="size-5" strokeWidth="1.5" />
 				</div>
 				<div class=" self-center truncate">{$i18n.t('Archived Chats')}</div>
-			</DropdownMenu.Item>
+			</button>
 
 			{#if role === 'admin'}
-				<DropdownMenu.Item
-					as="a"
+				<a
 					href="/playground"
 					draggable="false"
 					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
-					on:click={async () => {
+					on:click={async (e) => {
+						if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+							return;
+						}
+
+						e.preventDefault();
 						show = false;
+						await goto('/playground');
+
 						if ($mobile) {
 							await tick();
 							showSidebar.set(false);
@@ -386,14 +395,20 @@
 						<Code className="size-5" strokeWidth="1.5" />
 					</div>
 					<div class=" self-center truncate">{$i18n.t('Playground')}</div>
-				</DropdownMenu.Item>
-				<DropdownMenu.Item
-					as="a"
+				</a>
+				<a
 					href="/admin"
 					draggable="false"
 					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
-					on:click={async () => {
+					on:click={async (e) => {
+						if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+							return;
+						}
+
+						e.preventDefault();
 						show = false;
+						await goto('/admin');
+
 						if ($mobile) {
 							await tick();
 							showSidebar.set(false);
@@ -404,7 +419,7 @@
 						<UserGroup className="w-5 h-5" strokeWidth="1.5" />
 					</div>
 					<div class=" self-center truncate">{$i18n.t('Admin Panel')}</div>
-				</DropdownMenu.Item>
+				</a>
 			{/if}
 
 			{#if help}
@@ -413,8 +428,7 @@
 				<!-- {$i18n.t('Help')} -->
 
 				{#if $user?.role === 'admin'}
-					<DropdownMenu.Item
-						as="a"
+					<a
 						href="https://docs.openwebui.com"
 						target="_blank"
 						draggable="false"
@@ -428,11 +442,10 @@
 							<QuestionMarkCircle className="size-5" />
 						</div>
 						<div class=" self-center truncate">{$i18n.t('Documentation')}</div>
-					</DropdownMenu.Item>
+					</a>
 
 					<!-- Releases -->
-					<DropdownMenu.Item
-						as="a"
+					<a
 						href={WEBUI_RELEASES_URL}
 						target="_blank"
 						draggable="false"
@@ -446,11 +459,12 @@
 							<Map className="size-5" />
 						</div>
 						<div class=" self-center truncate">{$i18n.t('Releases')}</div>
-					</DropdownMenu.Item>
+					</a>
 				{/if}
 
-				<DropdownMenu.Item
+				<button
 					class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+					type="button"
 					id="chat-share-button"
 					on:click={async () => {
 						show = false;
@@ -466,13 +480,14 @@
 						<Keyboard className="size-5" />
 					</div>
 					<div class=" self-center truncate">{$i18n.t('Keyboard shortcuts')}</div>
-				</DropdownMenu.Item>
+				</button>
 			{/if}
 
 			<hr class=" border-gray-50/30 dark:border-gray-800/30 my-1 p-0" />
 
-			<DropdownMenu.Item
+			<button
 				class="flex rounded-xl py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition cursor-pointer select-none"
+				type="button"
 				on:click={async () => {
 					const res = await userSignOut();
 					user.set(null);
@@ -486,7 +501,7 @@
 					<SignOut className="w-5 h-5" strokeWidth="1.5" />
 				</div>
 				<div class=" self-center truncate">{$i18n.t('Sign Out')}</div>
-			</DropdownMenu.Item>
+			</button>
 
 			{#if showActiveUsers && ($config?.features?.enable_public_active_users_count || role === 'admin') && usage}
 				{#if usage?.user_count}
@@ -507,7 +522,7 @@
 						>
 							<div class=" flex items-center">
 								<span class="relative flex size-2">
-									<span class="relative inline-flex rounded-full size-2 bg-green-500" />
+									<span class="relative inline-flex rounded-full size-2 bg-green-500"></span>
 								</span>
 							</div>
 

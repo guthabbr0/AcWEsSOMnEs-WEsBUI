@@ -3,6 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { config, models, settings, user } from '$lib/stores';
 	import { updateUserSettings } from '$lib/apis/users';
+	import { getSessionUser } from '$lib/apis/auths';
 	import { getModels as _getModels } from '$lib/apis';
 	import { goto } from '$app/navigation';
 
@@ -548,6 +549,36 @@
 
 	let selectedTab = 'general';
 
+	const hasOAuthLinkStatus = () => {
+		if (typeof window === 'undefined') {
+			return false;
+		}
+
+		const currentUrl = new URL(window.location.href);
+		return Boolean(
+			(currentUrl.searchParams.get('oauth_linked') || '').trim() ||
+				(currentUrl.searchParams.get('oauth_link_error') || '').trim()
+		);
+	};
+
+	const openAccountSettingsFromOAuthCallback = async () => {
+		if (!hasOAuthLinkStatus()) {
+			return;
+		}
+
+		selectedTab = 'account';
+		show = true;
+
+		const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
+			console.error('Failed to refresh session after OAuth account link', error);
+			return null;
+		});
+
+		if (sessionUser) {
+			await user.set(sessionUser);
+		}
+	};
+
 	// Function to handle sideways scrolling
 	const scrollHandler = (event) => {
 		const settingsTabsContainer = document.getElementById('settings-tabs-container');
@@ -576,8 +607,9 @@
 	onMount(() => {
 		availableSettings = getAvailableSettings();
 		setFilteredSettings();
+		openAccountSettingsFromOAuthCallback();
 
-		config.subscribe((configData) => {
+		config.subscribe(() => {
 			availableSettings = getAvailableSettings();
 			setFilteredSettings();
 		});
@@ -952,8 +984,4 @@
 		scrollbar-width: none; /* Firefox */
 	}
 
-	input[type='number'] {
-		appearance: textfield;
-		-moz-appearance: textfield; /* Firefox */
-	}
 </style>

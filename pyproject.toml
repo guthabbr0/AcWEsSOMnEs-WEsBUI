@@ -27,7 +27,7 @@ dependencies = [
     "aiocache==0.12.3",
     "aiofiles==25.1.0",
     "starlette-compress==1.7.0",
-    "Brotli==1.1.0",
+    "Brotli==1.2.0",
     "httpx[socks,http2,zstd,cli,brotli]==0.28.1",
     "starsessions[redis]==2.2.1",
     "python-mimeparse==2.0.0",
@@ -51,7 +51,7 @@ dependencies = [
     "mcp==1.26.0",
 
     "openai==2.29.0",
-    "anthropic==0.86.0",
+    "anthropic==0.87.0",
     "google-genai==1.66.0",
 
     "langchain==1.2.10",

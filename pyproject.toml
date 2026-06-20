@@ -57,7 +57,7 @@ dependencies = [
     "langchain==1.2.10",
     "langchain-community==0.4.1",
     "langchain-classic==1.0.8",
-    "langchain-text-splitters==1.1.1",
+    "langchain-text-splitters==1.1.2",
 
     "fake-useragent==2.2.0",
     "chromadb==1.5.9",
@@ -68,7 +68,7 @@ dependencies = [
     "transformers==5.4.0",
     "sentence-transformers==5.2.3",
     "accelerate==1.13.0",
-    "pyarrow==23.0.1", # fix: pin pyarrow version to 20 for rpi compatibility #15897
+    "pyarrow==24.0.0", # fix: pin pyarrow version to 20 for rpi compatibility #15897
     "einops==0.8.2",
 
     "ftfy==6.3.1",
@@ -92,7 +92,7 @@ dependencies = [
     "soundfile==0.13.1",
     "azure-ai-documentintelligence==1.0.2",
 
-    "pillow==12.1.1",
+    "pillow==12.2.0",
     "opencv-python-headless==4.13.0.92",
     "rapidocr-onnxruntime==1.4.4",
     "rank-bm25==0.2.2",
@@ -151,7 +151,7 @@ all = [
     "moto[s3]>=5.0.26",
     "gcp-storage-emulator>=2024.8.3",
     "docker~=7.1.0",
-    "pytest~=8.3.2",
+    "pytest~=9.1.1",
     "pytest-docker~=3.2.5",
     "playwright==1.58.0", # Caution: version must match docker-compose.playwright.yaml - Update the docker-compose.yaml if necessary
     "elasticsearch==9.3.0",

@@ -285,13 +285,44 @@
 
 		return {
 			...targetUser,
-			presence_state: patch?.presence_state ?? targetUser?.presence_state ?? 'online',
-			status_emoji: patch?.status_emoji ?? targetUser?.status_emoji ?? null,
-			status_message: patch?.status_message ?? targetUser?.status_message ?? null,
-			status_expires_at: patch?.status_expires_at ?? targetUser?.status_expires_at ?? null,
+			presence_state: Object.prototype.hasOwnProperty.call(patch, 'presence_state')
+				? patch.presence_state
+				: (targetUser?.presence_state ?? 'online'),
+			status_emoji: Object.prototype.hasOwnProperty.call(patch, 'status_emoji')
+				? patch.status_emoji
+				: (targetUser?.status_emoji ?? null),
+			status_message: Object.prototype.hasOwnProperty.call(patch, 'status_message')
+				? patch.status_message
+				: (targetUser?.status_message ?? null),
+			status_expires_at: Object.prototype.hasOwnProperty.call(patch, 'status_expires_at')
+				? patch.status_expires_at
+				: (targetUser?.status_expires_at ?? null),
 			is_active:
 				typeof patch?.is_active === 'boolean' ? patch.is_active : (targetUser?.is_active ?? false)
 		};
+	};
+
+	const applyRealtimeConfigUpdate = (patch) => {
+		if (!patch || typeof patch !== 'object') {
+			return;
+		}
+
+		config.update((currentConfig) => ({
+			...(currentConfig ?? {}),
+			...patch,
+			ui: {
+				...(currentConfig?.ui ?? {}),
+				...(patch.ui ?? {})
+			},
+			features: {
+				...(currentConfig?.features ?? {}),
+				...(patch.features ?? {})
+			},
+			oauth: {
+				...(currentConfig?.oauth ?? {}),
+				...(patch.oauth ?? {})
+			}
+		}));
 	};
 
 	const applyRealtimePresenceUpdate = (patch) => {
@@ -656,6 +687,11 @@
 
 		if (type === 'user:presence') {
 			applyRealtimePresenceUpdate(data);
+			return;
+		}
+
+		if (type === 'config:update') {
+			applyRealtimeConfigUpdate(data);
 			return;
 		}
 

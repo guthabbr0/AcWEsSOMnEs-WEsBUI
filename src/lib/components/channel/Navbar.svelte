@@ -53,7 +53,14 @@
 		return member?.is_active ? 'online' : 'offline';
 	};
 
+	const getPinnedPreview = (message: any) =>
+		String(message?.content ?? '')
+			.replace(/<[^>]*>/g, '')
+			.replace(/\s+/g, ' ')
+			.trim();
+
 	export let channel;
+	export let latestPinnedMessage = null;
 
 	export let onPin = (messageId, pinned) => {};
 	export let onUpdate = () => {};
@@ -236,4 +243,22 @@
 			</div>
 		</div>
 	</div>
+
+	{#if latestPinnedMessage}
+		<button
+			type="button"
+			class="mt-1 mb-0.5 w-full max-w-full rounded-lg border border-yellow-200/80 bg-yellow-50/90 px-3 py-1.5 text-left text-xs text-yellow-900 shadow-sm transition hover:bg-yellow-100/90 dark:border-yellow-900/50 dark:bg-yellow-950/50 dark:text-yellow-100 dark:hover:bg-yellow-950/70"
+			on:click={() => {
+				showChannelPinnedMessagesModal = true;
+			}}
+		>
+			<div class="flex items-center gap-2 min-w-0">
+				<Pin className="size-3.5 shrink-0" strokeWidth="2" />
+				<div class="shrink-0 font-medium">{$i18n.t('Pinned Message')}</div>
+				<div class="truncate opacity-80">
+					{getPinnedPreview(latestPinnedMessage) || $i18n.t('View pinned message')}
+				</div>
+			</div>
+		</button>
+	{/if}
 </nav>

@@ -314,7 +314,7 @@ if JWT_EXPIRES_IN.value == '-1':
 # OAuth config
 ####################################
 
-ENABLE_OAUTH_PERSISTENT_CONFIG = os.environ.get('ENABLE_OAUTH_PERSISTENT_CONFIG', 'False').lower() == 'true'
+ENABLE_OAUTH_PERSISTENT_CONFIG = os.environ.get('ENABLE_OAUTH_PERSISTENT_CONFIG', 'True').lower() == 'true'
 
 ENABLE_OAUTH_SIGNUP = PersistentConfig(
     'ENABLE_OAUTH_SIGNUP',
@@ -3593,6 +3593,12 @@ WEB_LOADER_CONCURRENT_REQUESTS = PersistentConfig(
     'WEB_LOADER_CONCURRENT_REQUESTS',
     'rag.web.loader.concurrent_requests',
     int(os.getenv('WEB_LOADER_CONCURRENT_REQUESTS', '10')),
+)
+
+WEB_FETCH_MAX_CONTENT_LENGTH = PersistentConfig(
+    'WEB_FETCH_MAX_CONTENT_LENGTH',
+    'rag.web.fetch.max_content_length',
+    int(os.getenv('WEB_FETCH_MAX_CONTENT_LENGTH', '0')),
 )
 
 WEB_LOADER_TIMEOUT = PersistentConfig(

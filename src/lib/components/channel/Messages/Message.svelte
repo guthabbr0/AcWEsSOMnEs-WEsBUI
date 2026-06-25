@@ -61,6 +61,7 @@
 	export let onReaction: Function = () => {};
 
 	let showButtons = false;
+	let showReactionPicker = false;
 
 	let edit = false;
 	let editedContent = null;
@@ -114,23 +115,32 @@
 	>
 		{#if !edit && !disabled}
 			<div
-				class=" absolute {showButtons ? '' : 'invisible group-hover:visible'} right-1 -top-2 z-10"
+				class=" absolute {showButtons || showReactionPicker
+					? ''
+					: 'invisible group-hover:visible'} right-1 -top-2 z-10"
 			>
 				<div
 					class="flex gap-1 rounded-lg bg-white dark:bg-gray-850 shadow-md p-0.5 border border-gray-100/30 dark:border-gray-850/30"
 				>
 					{#if onReaction}
 						<EmojiPicker
+							bind:show={showReactionPicker}
 							showGifTab={false}
-							onClose={() => (showButtons = false)}
+							onClose={() => {
+								if (!showReactionPicker) {
+									showButtons = false;
+								}
+							}}
 							onSubmit={(name) => {
-								showButtons = false;
 								onReaction(name);
+								showReactionPicker = false;
+								showButtons = false;
 							}}
 						>
 							<Tooltip content={$i18n.t('Add Reaction')}>
 								<button
 									class="hover:bg-gray-100 dark:hover:bg-gray-800 transition rounded-lg p-1"
+									type="button"
 									on:click={() => {
 										showButtons = true;
 									}}

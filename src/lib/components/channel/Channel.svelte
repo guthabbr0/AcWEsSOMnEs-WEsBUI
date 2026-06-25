@@ -15,7 +15,12 @@
 		user,
 		WEBUI_NAME
 	} from '$lib/stores';
-	import { getChannelById, getChannelMessages, sendMessage } from '$lib/apis/channels';
+	import {
+		getChannelById,
+		getChannelMessages,
+		getChannelPinnedMessages,
+		sendMessage
+	} from '$lib/apis/channels';
 
 	import Messages from './Messages.svelte';
 	import MessageInput from './MessageInput.svelte';
@@ -38,6 +43,7 @@
 
 	let channel = null;
 	let messages = null;
+	let latestPinnedMessage = null;
 
 	let replyToMessage = null;
 	let threadId = null;
@@ -89,6 +95,7 @@
 		top = false;
 		messages = null;
 		channel = null;
+		latestPinnedMessage = null;
 		threadId = null;
 
 		typingUsers = [];
@@ -99,6 +106,7 @@
 		});
 
 		if (channel) {
+			await refreshLatestPinnedMessage();
 			messages = await getChannelMessages(localStorage.token, id, 0);
 
 			if (messages) {
@@ -111,6 +119,16 @@
 		} else {
 			goto('/');
 		}
+	};
+
+	const refreshLatestPinnedMessage = async () => {
+		if (!id) {
+			latestPinnedMessage = null;
+			return;
+		}
+
+		const pinnedMessages = await getChannelPinnedMessages(localStorage.token, id, 1).catch(() => null);
+		latestPinnedMessage = Array.isArray(pinnedMessages) ? (pinnedMessages[0] ?? null) : null;
 	};
 
 	const channelEventHandler = async (event) => {
@@ -140,6 +158,10 @@
 
 				if (idx !== -1) {
 					messages[idx] = data;
+				}
+
+				if (Object.prototype.hasOwnProperty.call(data ?? {}, 'is_pinned')) {
+					await refreshLatestPinnedMessage();
 				}
 			} else if (type === 'message:delete') {
 				messages = messages.filter((message) => message.id !== data.id);
@@ -211,10 +233,18 @@
 			changed = true;
 			return {
 				...channelUser,
-				presence_state: patch?.presence_state ?? channelUser?.presence_state ?? 'online',
-				status_emoji: patch?.status_emoji ?? channelUser?.status_emoji ?? null,
-				status_message: patch?.status_message ?? channelUser?.status_message ?? null,
-				status_expires_at: patch?.status_expires_at ?? channelUser?.status_expires_at ?? null,
+				presence_state: Object.prototype.hasOwnProperty.call(patch, 'presence_state')
+					? patch.presence_state
+					: (channelUser?.presence_state ?? 'online'),
+				status_emoji: Object.prototype.hasOwnProperty.call(patch, 'status_emoji')
+					? patch.status_emoji
+					: (channelUser?.status_emoji ?? null),
+				status_message: Object.prototype.hasOwnProperty.call(patch, 'status_message')
+					? patch.status_message
+					: (channelUser?.status_message ?? null),
+				status_expires_at: Object.prototype.hasOwnProperty.call(patch, 'status_expires_at')
+					? patch.status_expires_at
+					: (channelUser?.status_expires_at ?? null),
 				is_active:
 					typeof patch?.is_active === 'boolean'
 						? patch.is_active
@@ -350,9 +380,22 @@
 		<Pane defaultSize={50} minSize={50} class="h-full flex flex-col w-full relative">
 			<Navbar
 				{channel}
+				{latestPinnedMessage}
 				onPin={(messageId, pinned) => {
+					if (!pinned && latestPinnedMessage?.id === messageId) {
+						latestPinnedMessage = null;
+						void refreshLatestPinnedMessage();
+					}
 					messages = messages.map((message) => {
 						if (message.id === messageId) {
+							if (pinned) {
+								latestPinnedMessage = {
+									...message,
+									is_pinned: pinned,
+									pinned_by: $user?.id,
+									pinned_at: Date.now() * 1000000
+								};
+							}
 							return {
 								...message,
 								is_pinned: pinned

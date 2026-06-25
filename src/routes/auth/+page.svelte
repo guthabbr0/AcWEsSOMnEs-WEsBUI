@@ -46,10 +46,6 @@
 
 	let ldapUsername = '';
 
-	$: if (mode === 'signup' && !($config?.features?.enable_password_signup ?? true)) {
-		mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
-	}
-
 	let showGuestNotification = false;
 	let guestNotificationTitle = '';
 	let guestNotificationDescription = '';
@@ -196,9 +192,9 @@
 			.filter((provider) => configuredProviderSet.has(provider));
 	};
 
-	const getVisibleOAuthProviders = () => {
+	const getVisibleOAuthProvidersForMode = (targetMode: string) => {
 		const loginProviders = getAllowedOAuthProviders('login');
-		if (mode !== 'signup') {
+		if (targetMode !== 'signup') {
 			return loginProviders;
 		}
 
@@ -210,7 +206,20 @@
 		return loginProviders.filter((provider) => signupProviders.has(provider));
 	};
 
+	const getVisibleOAuthProviders = () => getVisibleOAuthProvidersForMode(mode);
+
+	$: canSignupWithPassword = $config?.features?.enable_password_signup ?? true;
+	$: canSignupWithOAuth =
+		($config?.features?.enable_oauth_login ?? true) &&
+		($config?.features?.enable_oauth_signup ?? false) &&
+		getVisibleOAuthProvidersForMode('signup').length > 0;
+	$: canShowSignup = Boolean($config?.features.enable_signup) && (canSignupWithPassword || canSignupWithOAuth);
+	$: shouldShowPasswordForm =
+		mode !== 'signup' || canSignupWithPassword || Boolean($config?.onboarding ?? false);
 	$: visibleOAuthProviders = getVisibleOAuthProviders();
+	$: if (mode === 'signup' && !canShowSignup && !($config?.onboarding ?? false)) {
+		mode = $config?.features.enable_ldap ? 'ldap' : 'signin';
+	}
 	$: evaluateGuestNotification();
 
 	const oauthCallbackHandler = async () => {
@@ -428,7 +437,7 @@
 										{/if}
 									</div>
 
-									{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+									{#if shouldShowPasswordForm && ($config?.features.enable_login_form || $config?.features.enable_ldap || form)}
 										<div class="flex flex-col mt-4">
 											{#if mode === 'signup'}
 												<div class="mb-2">
@@ -536,8 +545,23 @@
 											{/if}
 										</div>
 									{/if}
+									{#if mode === 'signup' && $config?.features?.enable_invite_only_auth && !shouldShowPasswordForm}
+										<div class="mt-4 text-left">
+											<label for="invite-code-sso" class="text-sm font-medium mb-1 block"
+												>{$i18n.t('Invite Code')}</label
+											>
+											<input
+												bind:value={inviteCode}
+												type="text"
+												id="invite-code-sso"
+												class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
+												placeholder={$i18n.t('Enter your invite code')}
+												required
+											/>
+										</div>
+									{/if}
 									<div class="mt-5">
-										{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+										{#if shouldShowPasswordForm && ($config?.features.enable_login_form || $config?.features.enable_ldap || form)}
 											{#if mode === 'ldap'}
 												<button
 													class="bg-gray-700/5 hover:bg-gray-700/10 dark:bg-gray-100/5 dark:hover:bg-gray-100/10 dark:text-gray-300 dark:hover:text-white transition w-full rounded-full font-medium text-sm py-2.5"
@@ -557,7 +581,7 @@
 															: $i18n.t('Create Account')}
 												</button>
 
-												{#if $config?.features.enable_signup && ($config?.features.enable_password_signup ?? true) && !($config?.onboarding ?? false)}
+												{#if canShowSignup && !($config?.onboarding ?? false)}
 													<div class=" mt-4 text-sm text-center">
 														{mode === 'signin'
 															? $i18n.t("Don't have an account?")
@@ -586,7 +610,7 @@
 								{#if ($config?.features?.enable_oauth_login ?? true) && visibleOAuthProviders.length > 0}
 									<div class="inline-flex items-center justify-center w-full">
 										<hr class="w-32 h-px my-4 border-0 dark:bg-gray-100/10 bg-gray-700/10" />
-										{#if $config?.features.enable_login_form || $config?.features.enable_ldap || form}
+										{#if shouldShowPasswordForm && ($config?.features.enable_login_form || $config?.features.enable_ldap || form)}
 											<span
 												class="px-3 text-sm font-medium text-gray-900 dark:text-white bg-transparent"
 												>{$i18n.t('or')}</span
@@ -785,6 +809,28 @@
 												>
 											</button>
 										{/if}
+									</div>
+								{/if}
+
+								{#if canShowSignup && !($config?.onboarding ?? false) && !(shouldShowPasswordForm && ($config?.features.enable_login_form || $config?.features.enable_ldap || form))}
+									<div class="mt-4 text-sm text-center">
+										{mode === 'signin'
+											? $i18n.t("Don't have an account?")
+											: $i18n.t('Already have an account?')}
+
+										<button
+											class="font-medium underline"
+											type="button"
+											on:click={() => {
+												if (mode === 'signin') {
+													mode = 'signup';
+												} else {
+													mode = 'signin';
+												}
+											}}
+										>
+											{mode === 'signin' ? $i18n.t('Sign up') : $i18n.t('Sign in')}
+										</button>
 									</div>
 								{/if}
 

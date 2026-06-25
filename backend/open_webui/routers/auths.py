@@ -119,6 +119,59 @@ def _sanitize_oauth_provider_list(provider_list):
     return sanitized
 
 
+async def _emit_public_config_update(request: Request):
+    try:
+        from open_webui.socket.main import SESSION_POOL, emit_to_users
+
+        user_ids = list({entry.get('id') for entry in SESSION_POOL.values() if entry and entry.get('id')})
+        if not user_ids:
+            return
+
+        await emit_to_users(
+            'events',
+            {
+                'chat_id': None,
+                'message_id': None,
+                'data': {
+                    'type': 'config:update',
+                    'data': {
+                        'features': {
+                            'enable_signup': request.app.state.config.ENABLE_SIGNUP,
+                            'enable_password_signup': request.app.state.config.ENABLE_PASSWORD_SIGNUP,
+                            'enable_oauth_login': request.app.state.config.ENABLE_OAUTH_LOGIN,
+                            'enable_oauth_signup': request.app.state.config.ENABLE_OAUTH_SIGNUP,
+                            'enable_invite_only_auth': request.app.state.config.ENABLE_INVITE_ONLY_AUTH,
+                        },
+                        'oauth': {
+                            'allowed_login_providers': request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS,
+                            'allowed_signup_providers': request.app.state.config.OAUTH_ALLOWED_SIGNUP_PROVIDERS,
+                        },
+                        'ui': {
+                            'system_notice': {
+                                'enabled': request.app.state.config.ENABLE_SYSTEM_NOTICE,
+                                'title': request.app.state.config.SYSTEM_NOTICE_TITLE,
+                                'content': request.app.state.config.SYSTEM_NOTICE_CONTENT,
+                            },
+                            'motd': {
+                                'enabled': request.app.state.config.ENABLE_MOTD,
+                                'title': request.app.state.config.MOTD_TITLE,
+                                'content': request.app.state.config.MOTD_CONTENT,
+                            },
+                            'notification_sounds': request.app.state.config.NOTIFICATION_SOUND_LIBRARY,
+                            'custom_emojis': request.app.state.config.CUSTOM_EMOJI_LIBRARY,
+                            'pending_user_overlay_title': request.app.state.config.PENDING_USER_OVERLAY_TITLE,
+                            'pending_user_overlay_content': request.app.state.config.PENDING_USER_OVERLAY_CONTENT,
+                            'response_watermark': request.app.state.config.RESPONSE_WATERMARK,
+                        },
+                    },
+                },
+            },
+            user_ids,
+        )
+    except Exception as e:
+        log.debug(f'Failed to emit realtime config update: {e}')
+
+
 def _sanitize_notification_sound_library(raw_sounds) -> list[dict]:
     if not isinstance(raw_sounds, list):
         return []
@@ -1601,6 +1654,8 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
     request.app.state.config.PENDING_USER_OVERLAY_CONTENT = form_data.PENDING_USER_OVERLAY_CONTENT
 
     request.app.state.config.RESPONSE_WATERMARK = form_data.RESPONSE_WATERMARK
+
+    await _emit_public_config_update(request)
 
     return _serialize_admin_config(request)
 

@@ -2,6 +2,7 @@ import json
 import logging
 import base64
 import io
+import time
 from typing import Optional
 
 
@@ -1255,12 +1256,30 @@ async def pin_channel_message(
     try:
         Messages.update_is_pinned_by_id(message_id, form_data.is_pinned, user.id, db=db)
         message = Messages.get_message_by_id(message_id, db=db)
-        return MessageUserResponse(
+        response_message = MessageUserResponse(
             **{
                 **message.model_dump(),
+                'reactions': Messages.get_reactions_by_message_id(message.id, db=db),
                 'user': UserNameResponse(**Users.get_user_by_id(message.user_id, db=db).model_dump()),
             }
         )
+
+        await sio.emit(
+            'events:channel',
+            {
+                'channel_id': id,
+                'message_id': message.id,
+                'data': {
+                    'type': 'message:update',
+                    'data': response_message.model_dump(),
+                },
+                'user': {'id': user.id, 'name': user.name},
+                'created_at': int(time.time() * 1000),
+            },
+            room=f'channel:{id}',
+        )
+
+        return response_message
     except Exception as e:
         log.exception(e)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.DEFAULT())

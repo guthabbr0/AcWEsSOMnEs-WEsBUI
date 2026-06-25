@@ -480,6 +480,15 @@
 		}, 300);
 	};
 
+	const updateIntegerField = (field: keyof AuthorizationConfig, value: string, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+		if (!adminConfig) {
+			return;
+		}
+
+		const parsed = Number(value);
+		adminConfig[field] = Math.min(max, Math.max(min, Number.isFinite(parsed) ? Math.floor(parsed) : min));
+	};
+
 	const generateInviteHandler = async () => {
 		if (!adminConfig) {
 			return;
@@ -820,6 +829,9 @@
 										min="4"
 										max="32"
 										bind:value={adminConfig.INVITE_CODE_LENGTH}
+										on:input={(event) => {
+											updateIntegerField('INVITE_CODE_LENGTH', event.currentTarget.value, 4, 32);
+										}}
 										class="w-full bg-transparent text-sm outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-2 py-1.5"
 									/>
 								</div>
@@ -878,6 +890,9 @@
 											type="number"
 											min="0"
 											bind:value={adminConfig.INVITE_CODE_MAX_USES}
+											on:input={(event) => {
+												updateIntegerField('INVITE_CODE_MAX_USES', event.currentTarget.value, 0);
+											}}
 											class="w-full bg-transparent text-sm outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-2 py-1.5"
 										/>
 										<div class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">

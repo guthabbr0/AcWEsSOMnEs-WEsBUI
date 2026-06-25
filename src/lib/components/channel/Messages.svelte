@@ -183,6 +183,10 @@
 						toast.error(`${error}`);
 						return null;
 					});
+
+					if (updatedMessage) {
+						messages = messages.map((m) => (m.id === updatedMessage.id ? updatedMessage : m));
+					}
 				}}
 				onThread={(id) => {
 					onThread(id);

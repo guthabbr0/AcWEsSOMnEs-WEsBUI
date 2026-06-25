@@ -226,7 +226,7 @@
 			const mainKeys = normalized.filter((k) => !['ctrl', 'shift', 'alt', 'mod'].includes(k));
 
 			// Get the main key pressed
-			const keyPressed = event.key.toLowerCase();
+			const keyPressed = (event.key || 'Unidentified').toLowerCase();
 
 			// Check modifiers
 			if (needShift && !event.shiftKey) return false;

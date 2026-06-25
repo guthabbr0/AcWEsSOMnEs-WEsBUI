@@ -106,12 +106,19 @@
 	];
 
 	const getPresenceState = () => {
-		const value = String($user?.presence_state ?? 'online').toLowerCase();
-		return presenceOptions.some((option) => option.id === value) ? value : 'online';
+		const value = $user?.presence_state;
+		if (value === null || value === undefined || value === '') {
+			return $user?.is_active ? 'online' : 'offline';
+		}
+		const normalized = String(value).toLowerCase();
+		return presenceOptions.some((option) => option.id === normalized) ? normalized : null;
 	};
 
 	const getPresenceOption = () => {
 		const state = getPresenceState();
+		if (!state) {
+			return presenceOptions.find((option) => option.id === 'offline') ?? presenceOptions[0];
+		}
 		return presenceOptions.find((option) => option.id === state) ?? presenceOptions[0];
 	};
 
@@ -128,7 +135,8 @@
 			return;
 		}
 
-		user.set(await getSessionUser(localStorage.token));
+		user.set(res);
+		show = false;
 	};
 </script>
 
@@ -220,9 +228,11 @@
 							sideOffset={8}
 						>
 							{#each presenceOptions as option}
-								<DropdownMenu.Item
-									class="w-full rounded-xl px-2.5 py-2 text-left cursor-pointer select-none hover:bg-gray-50 dark:hover:bg-gray-800 transition"
-									on:click={() => {
+								<button
+									type="button"
+									class="w-full text-left rounded-xl px-2.5 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+									on:click={(e) => {
+										e.stopPropagation();
 										updatePresenceState(option.id);
 									}}
 								>
@@ -253,7 +263,7 @@
 											{/if}
 										</div>
 									</div>
-								</DropdownMenu.Item>
+								</button>
 							{/each}
 						</DropdownMenu.SubContent>
 					</DropdownMenu.Sub>
@@ -298,7 +308,8 @@
 
 											if (res) {
 												toast.success($i18n.t('Status cleared successfully'));
-												user.set(await getSessionUser(localStorage.token));
+												user.set(res);
+												show = false;
 											} else {
 												toast.error($i18n.t('Failed to clear status'));
 											}

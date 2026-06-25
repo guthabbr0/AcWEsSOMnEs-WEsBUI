@@ -19,6 +19,21 @@
 	export let align = 'start';
 	export let showGifTab = true;
 
+	// Automatically hide GIF tab if VITE_KLIPY_APP_KEY is not set
+	const hasKlipyAppKey = () => {
+		const uiConfig = ($config?.ui ?? {}) as { klipy?: KlipyUiConfig };
+		const klipyConfig = uiConfig.klipy ?? {};
+		const appKey = String(
+			klipyConfig.app_key ??
+				import.meta.env.VITE_KLIPY_APP_KEY ??
+				import.meta.env.VITE_KLIPY_APPKEY ??
+				''
+		).trim();
+		return Boolean(appKey);
+	};
+
+	$: effectiveShowGifTab = showGifTab && hasKlipyAppKey();
+
 	type PickerEmoji = {
 		id: string;
 		type: 'unicode' | 'custom';
@@ -1017,7 +1032,7 @@
 		};
 	};
 
-	let show = false;
+	export let show = false;
 	let activeTab: 'emoji' | 'gif' = 'emoji';
 	let search = '';
 	let favoriteShortCodes: string[] = [];
@@ -1651,7 +1666,7 @@
 		}
 	});
 
-	$: if (!showGifTab && activeTab === 'gif') {
+	$: if (!effectiveShowGifTab && activeTab === 'gif') {
 		activeTab = 'emoji';
 	}
 
@@ -1703,7 +1718,7 @@
 		const normalizedSearch = normalizeShortCode(search);
 		const sections: EmojiSection[] = [];
 
-		if (!emojiDataset || (showGifTab && activeTab === 'gif')) {
+		if (!emojiDataset || (effectiveShowGifTab && activeTab === 'gif')) {
 			emojiSections = [];
 		} else if (normalizedSearch) {
 			const customResults = customEmojis.filter((emoji) =>
@@ -1810,7 +1825,7 @@
 		activeGifSectionId = '';
 	}
 
-	$: if (show && showGifTab && activeTab === 'gif') {
+	$: if (show && effectiveShowGifTab && activeTab === 'gif') {
 		void ensureGifTabInitialized();
 	}
 </script>
@@ -1822,7 +1837,7 @@
 		if (state) {
 			syncGifFavoritesFromStorage();
 
-			if (activeTab === 'gif' && showGifTab) {
+			if (activeTab === 'gif' && effectiveShowGifTab) {
 				void ensureGifTabInitialized();
 			} else {
 				void ensureEmojiDataset();
@@ -1843,15 +1858,16 @@
 		<slot />
 	</DropdownMenu.Trigger>
 
-	<DropdownMenu.Content
-		class="max-w-full w-[22rem] border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850 rounded-3xl z-9999 shadow-lg dark:text-white"
-		sideOffset={8}
-		{side}
-		{align}
-		transition={flyAndScale}
-	>
+	<DropdownMenu.Portal>
+		<DropdownMenu.Content
+			class="max-w-full w-[22rem] border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850 rounded-3xl z-9999 shadow-lg dark:text-white"
+			sideOffset={8}
+			{side}
+			{align}
+			transition={flyAndScale}
+		>
 		<div class="px-3 pt-2.5 pb-2 border-b border-gray-100/70 dark:border-gray-800/70 space-y-2">
-			{#if showGifTab}
+			{#if effectiveShowGifTab}
 				<div class="inline-flex items-center gap-1.5">
 					<button
 						type="button"
@@ -1887,7 +1903,7 @@
 				</div>
 			{/if}
 
-			{#if !showGifTab || activeTab === 'emoji'}
+			{#if !effectiveShowGifTab || activeTab === 'emoji'}
 				<div class="flex items-center gap-2">
 					<input
 						type="text"
@@ -1934,7 +1950,7 @@
 			{/if}
 		</div>
 
-		{#if showGifTab && activeTab === 'gif'}
+		{#if effectiveShowGifTab && activeTab === 'gif'}
 			<div class="h-96 flex">
 				<div
 					class="flex-1 overflow-y-auto px-2 pb-2 pt-1 text-sm"
@@ -2326,5 +2342,6 @@
 				</div>
 			</div>
 		{/if}
-	</DropdownMenu.Content>
+		</DropdownMenu.Content>
+	</DropdownMenu.Portal>
 </DropdownMenu.Root>

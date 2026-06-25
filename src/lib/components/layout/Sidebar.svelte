@@ -88,6 +88,28 @@
 
 	let showPinnedModels = false;
 	let showChannels = false;
+
+	const getPresenceState = (currentUser) => {
+		const normalized = String(currentUser?.presence_state ?? '').toLowerCase();
+		if (['online', 'idle', 'dnd', 'offline'].includes(normalized)) {
+			return normalized;
+		}
+		return currentUser?.is_active ? 'online' : 'offline';
+	};
+
+	const getPresenceIndicatorClass = (currentUser) => {
+		const presence = getPresenceState(currentUser);
+		if (presence === 'dnd') {
+			return 'bg-red-500';
+		}
+		if (presence === 'idle') {
+			return 'bg-yellow-500';
+		}
+		if (presence === 'offline') {
+			return 'bg-gray-300 dark:bg-gray-700';
+		}
+		return 'bg-green-500';
+	};
 	let showFolders = false;
 
 	let folders = {};
@@ -882,9 +904,9 @@
 										<div class="absolute -bottom-0.5 -right-0.5">
 											<span class="relative flex size-2.5">
 												<span
-													class="relative inline-flex size-2.5 rounded-full {true
-														? 'bg-green-500'
-														: 'bg-gray-300 dark:bg-gray-700'} border-2 border-white dark:border-gray-900"
+													class="relative inline-flex size-2.5 rounded-full {getPresenceIndicatorClass(
+														$user
+													)} border-2 border-white dark:border-gray-900"
 												></span>
 											</span>
 										</div>
@@ -1470,9 +1492,9 @@
 										<div class="absolute -bottom-0.5 -right-0.5">
 											<span class="relative flex size-2.5">
 												<span
-													class="relative inline-flex size-2.5 rounded-full {true
-														? 'bg-green-500'
-														: 'bg-gray-300 dark:bg-gray-700'} border-2 border-white dark:border-gray-900"
+													class="relative inline-flex size-2.5 rounded-full {getPresenceIndicatorClass(
+														$user
+													)} border-2 border-white dark:border-gray-900"
 												></span>
 											</span>
 										</div>

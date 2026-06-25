@@ -37,6 +37,7 @@
 
 		if (res) {
 			toast.success($i18n.t('Status updated successfully'));
+			user.set(res);
 			onSave();
 		} else {
 			toast.error($i18n.t('Failed to update status'));

@@ -3,10 +3,10 @@ import uuid
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import BigInteger, Boolean, Column, Integer, Text
-from sqlalchemy.orm import Session
+from sqlalchemy import BigInteger, Boolean, Column, Integer, Text, delete, select
 
-from open_webui.internal.db import Base, get_db_context
+from open_webui.internal.db import Base, get_async_db_context
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class ModelHealthCheck(Base):
@@ -46,15 +46,15 @@ class ModelHealthCheckForm(BaseModel):
 
 
 class ModelHealthCheckTable:
-    def insert_checks(
-        self, checks: list[ModelHealthCheckForm], db: Optional[Session] = None
+    async def insert_checks(
+        self, checks: list[ModelHealthCheckForm], db: Optional[AsyncSession] = None
     ) -> list[ModelHealthCheckModel]:
         if not checks:
             return []
 
         inserted_checks: list[ModelHealthCheckModel] = []
 
-        with get_db_context(db) as db:
+        async with get_async_db_context(db) as db:
             for check in checks:
                 payload = check.model_dump()
                 payload['id'] = str(uuid.uuid4())
@@ -64,30 +64,33 @@ class ModelHealthCheckTable:
                 db.add(record)
                 inserted_checks.append(ModelHealthCheckModel.model_validate(record))
 
-            db.commit()
+            await db.commit()
 
         return inserted_checks
 
-    def get_checks_since(self, since: int, db: Optional[Session] = None) -> list[ModelHealthCheckModel]:
-        with get_db_context(db) as db:
-            records = (
-                db.query(ModelHealthCheck)
-                .filter(ModelHealthCheck.checked_at >= since)
+    async def get_checks_since(
+        self, since: int, db: Optional[AsyncSession] = None
+    ) -> list[ModelHealthCheckModel]:
+        async with get_async_db_context(db) as db:
+            result = await db.execute(
+                select(ModelHealthCheck)
+                .where(ModelHealthCheck.checked_at >= since)
                 .order_by(ModelHealthCheck.checked_at.asc(), ModelHealthCheck.model_name.asc())
-                .all()
             )
+            records = result.scalars().all()
             return [ModelHealthCheckModel.model_validate(record) for record in records]
 
-    def get_latest_check_at(self, db: Optional[Session] = None) -> Optional[int]:
-        with get_db_context(db) as db:
-            record = db.query(ModelHealthCheck).order_by(ModelHealthCheck.checked_at.desc()).first()
+    async def get_latest_check_at(self, db: Optional[AsyncSession] = None) -> Optional[int]:
+        async with get_async_db_context(db) as db:
+            result = await db.execute(select(ModelHealthCheck).order_by(ModelHealthCheck.checked_at.desc()).limit(1))
+            record = result.scalars().first()
             return record.checked_at if record else None
 
-    def delete_checks_before(self, before: int, db: Optional[Session] = None) -> int:
-        with get_db_context(db) as db:
-            deleted = db.query(ModelHealthCheck).filter(ModelHealthCheck.checked_at < before).delete()
-            db.commit()
-            return int(deleted or 0)
+    async def delete_checks_before(self, before: int, db: Optional[AsyncSession] = None) -> int:
+        async with get_async_db_context(db) as db:
+            result = await db.execute(delete(ModelHealthCheck).where(ModelHealthCheck.checked_at < before))
+            await db.commit()
+            return int(result.rowcount or 0)
 
 
 ModelHealthChecks = ModelHealthCheckTable()

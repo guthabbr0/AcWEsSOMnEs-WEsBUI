@@ -419,17 +419,24 @@
 		}
 
 		const payload = {
-			...adminConfig,
+			ENABLE_SIGNUP: Boolean(adminConfig.ENABLE_SIGNUP),
+			ENABLE_PASSWORD_SIGNUP: Boolean(adminConfig.ENABLE_PASSWORD_SIGNUP),
+			ENABLE_OAUTH_LOGIN: Boolean(adminConfig.ENABLE_OAUTH_LOGIN),
+			ENABLE_OAUTH_SIGNUP: Boolean(adminConfig.ENABLE_OAUTH_SIGNUP),
 			OAUTH_ALLOWED_LOGIN_PROVIDERS: normalizeProviderList(
 				adminConfig.OAUTH_ALLOWED_LOGIN_PROVIDERS
 			),
 			OAUTH_ALLOWED_SIGNUP_PROVIDERS: normalizeProviderList(
 				adminConfig.OAUTH_ALLOWED_SIGNUP_PROVIDERS
 			),
+			ENABLE_INVITE_ONLY_AUTH: Boolean(adminConfig.ENABLE_INVITE_ONLY_AUTH),
+			INVITE_CREATOR_SCOPE: adminConfig.INVITE_CREATOR_SCOPE,
+			INVITE_CREATOR_GROUP_IDS: adminConfig.INVITE_CREATOR_GROUP_IDS,
 			INVITE_CREATOR_COOLDOWN_SECONDS: Math.max(0, creatorCooldownSeconds),
 			INVITE_CODE_LENGTH: Math.max(4, Math.min(32, Number(adminConfig.INVITE_CODE_LENGTH) || 8)),
 			INVITE_CODE_TTL_SECONDS: Math.max(0, inviteTtlSeconds),
 			INVITE_CODE_PREFIX: (adminConfig.INVITE_CODE_PREFIX ?? '').trim(),
+			INVITE_CODE_REUSABLE: Boolean(adminConfig.INVITE_CODE_REUSABLE),
 			INVITE_CODE_MAX_USES: adminConfig.INVITE_CODE_REUSABLE
 				? Math.max(0, Number(adminConfig.INVITE_CODE_MAX_USES) || 0)
 				: 1
@@ -441,8 +448,10 @@
 		});
 
 		if (response) {
-			adminConfig = normalizeAdminConfig(response);
-			syncDurationControlsFromConfig();
+			if (!silent) {
+				adminConfig = normalizeAdminConfig(response);
+				syncDurationControlsFromConfig();
+			}
 			if (!silent) {
 				toast.success(t('Authorization settings updated'));
 			}
@@ -477,7 +486,7 @@
 		autoSaveTimer = setTimeout(() => {
 			autoSaveTimer = null;
 			void runAutoSave();
-		}, 300);
+		}, 800);
 	};
 
 	const updateIntegerField = (field: keyof AuthorizationConfig, value: string, min = 0, max = Number.MAX_SAFE_INTEGER) => {
@@ -544,6 +553,7 @@
 		if (autoSaveTimer) {
 			clearTimeout(autoSaveTimer);
 			autoSaveTimer = null;
+			void runAutoSave();
 		}
 	});
 </script>

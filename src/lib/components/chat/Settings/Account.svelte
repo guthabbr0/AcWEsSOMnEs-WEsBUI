@@ -351,7 +351,7 @@
 
 		<hr class="border-gray-50 dark:border-gray-850/30 my-4" />
 
-		{#if $config?.features?.enable_login_form ?? true}
+		{#if ($config?.features?.enable_login_form ?? true) && $config?.features?.enable_password_change_form}
 			<div class="mt-2">
 				<UpdatePassword
 					showByDefault={$user?.password_change_required || $user?.has_password === false}

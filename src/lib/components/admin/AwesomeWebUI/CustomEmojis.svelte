@@ -144,7 +144,6 @@
 		).filter((item): item is CustomEmojiItem => item !== null);
 
 		const payload = {
-			...adminConfig,
 			CUSTOM_EMOJI_LIBRARY: sanitizedLibrary
 		};
 
@@ -154,7 +153,9 @@
 		});
 
 		if (response) {
-			adminConfig = normalizeAdminConfig(response);
+			if (!silent) {
+				adminConfig = normalizeAdminConfig(response);
+			}
 			if (!silent) {
 				toast.success(t('Custom emojis updated'));
 			}
@@ -189,7 +190,7 @@
 		autoSaveTimer = setTimeout(() => {
 			autoSaveTimer = null;
 			void runAutoSave();
-		}, 350);
+		}, 800);
 	};
 
 	const readFileAsDataUrl = (file: File): Promise<string> =>
@@ -342,45 +343,38 @@
 		if (autoSaveTimer) {
 			clearTimeout(autoSaveTimer);
 			autoSaveTimer = null;
+			void runAutoSave();
 		}
 	});
 </script>
 
 <form
-	class="flex flex-col h-full justify-between space-y-3 text-sm"
+	class="flex h-full flex-col justify-between text-sm"
 	on:submit|preventDefault={() => {
 		saveHandler();
 	}}
 >
-	<div class="space-y-3 overflow-y-scroll scrollbar-hidden h-full">
+	<div class="h-full space-y-3 overflow-y-scroll scrollbar-hidden pr-1">
 		{#if adminConfig}
-			<div
-				class="rounded-2xl border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 p-4 space-y-4"
-			>
-				<div>
-					<div class="text-base font-medium">{$i18n.t('Custom Emojis')}</div>
-					<div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-						{$i18n.t(
-							'Upload server-wide custom emoji that users can use in statuses, reactions, and other emoji pickers.'
-						)}
+			<section class="rounded-xl border border-gray-100 dark:border-gray-850 p-3 space-y-3">
+				<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+					<div>
+						<div class="text-base font-medium">{$i18n.t('Custom Emojis')}</div>
+						<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+							{$i18n.t('Upload server-wide custom emoji that users can use in statuses, reactions, and emoji pickers.')}
+						</div>
 					</div>
-				</div>
-
-				<div class="rounded-xl border border-gray-200/80 dark:border-gray-800 p-3 space-y-2">
-					<div class="text-xs font-medium">{$i18n.t('Upload Emoji')}</div>
-					<div class="flex flex-wrap items-center gap-2">
+					<div class="flex shrink-0 items-center gap-2">
+						<span class="rounded-lg bg-gray-50 px-2 py-1 text-xs text-gray-500 dark:bg-gray-850 dark:text-gray-400">
+							{adminConfig.CUSTOM_EMOJI_LIBRARY.length} {$i18n.t('emoji')}
+						</span>
 						<button
 							type="button"
-							class="w-fit rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100"
+							class="rounded-full bg-black px-3 py-2 text-xs font-medium text-white transition hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100"
 							on:click={() => fileInputEl?.click()}
 						>
 							{$i18n.t('Upload image')}
 						</button>
-						<div class="text-[11px] text-gray-500 dark:text-gray-400">
-							{$i18n.t(
-								'Supported: image/* (PNG, JPG, WEBP, GIF), max 1 MB. Name is generated from file name.'
-							)}
-						</div>
 					</div>
 
 					<input
@@ -396,34 +390,36 @@
 						}}
 					/>
 				</div>
+				<div class="text-[11px] text-gray-500 dark:text-gray-400">
+					{$i18n.t('Supported: image/* (PNG, JPG, WEBP, GIF), max 1 MB. Names are generated from file names.')}
+				</div>
+			</section>
 
-				<div class="space-y-2">
-					<div class="text-xs font-medium">{$i18n.t('Library')}</div>
-
+			<section class="space-y-1">
 					{#if adminConfig.CUSTOM_EMOJI_LIBRARY.length === 0}
-						<div class="text-xs text-gray-500 dark:text-gray-400">
+					<div class="rounded-xl border border-gray-100 p-4 text-xs text-gray-500 dark:border-gray-850 dark:text-gray-400">
 							{$i18n.t('No custom emojis uploaded yet.')}
 						</div>
 					{:else}
-						<div class="space-y-2">
 							{#each adminConfig.CUSTOM_EMOJI_LIBRARY as emoji (emoji.id)}
 								<div
-									class="rounded-xl border border-gray-200/80 dark:border-gray-800 p-3 bg-white/70 dark:bg-gray-900/60"
+								class="grid gap-3 border-b border-gray-100 px-2 py-2 last:border-b-0 dark:border-gray-850 md:grid-cols-[3rem_minmax(0,1fr)_minmax(9rem,14rem)_auto] md:items-center"
 								>
-									<div
-										class="grid gap-3 md:grid-cols-[64px_minmax(0,1fr)_minmax(0,220px)_auto] items-center"
-									>
-										<div class="flex items-center justify-center">
+								<div class="flex items-center gap-3 md:block">
+									<div class="flex size-11 items-center justify-center rounded-lg bg-gray-50 dark:bg-gray-950/60">
 											<img
 												src={emoji.data_url}
 												alt={emoji.name}
-												class="size-10 rounded-md object-contain bg-white/80 dark:bg-gray-950/80"
+											class="max-h-9 max-w-9 rounded object-contain"
 												loading="lazy"
 											/>
 										</div>
+								</div>
 
 										<div class="space-y-1">
+									<label class="sr-only" for="emoji-name-{emoji.id}">{$i18n.t('Emoji name')}</label>
 											<input
+										id="emoji-name-{emoji.id}"
 												type="text"
 												value={emoji.name}
 												on:change={(event) => {
@@ -432,7 +428,7 @@
 														target.value = emoji.name;
 													}
 												}}
-												class="w-full bg-transparent border border-gray-200/80 dark:border-gray-800 rounded-md px-2 py-1.5 text-xs"
+										class="w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-2 text-xs outline-hidden dark:border-gray-850"
 											/>
 											<div class="text-[11px] text-gray-500 dark:text-gray-400">
 												:{emoji.name}:
@@ -440,32 +436,44 @@
 										</div>
 
 										<div class="text-[11px] text-gray-500 dark:text-gray-400">
-											<div>
-												{$i18n.t('Uploaded by')}: {emoji.created_by_name ||
-													emoji.created_by ||
-													'Unknown'}
+									<div class="truncate">
+										{emoji.created_by_name || emoji.created_by || 'Unknown'}
 											</div>
-											<div>
-												{$i18n.t('Created')}: {formatTimestamp(emoji.created_at)}
+									<div class="truncate">
+										{formatTimestamp(emoji.created_at)}
 											</div>
 										</div>
 
-										<div class="flex justify-end">
+								<div class="flex items-center gap-1 md:justify-end">
+									<button
+										type="button"
+										class="rounded-lg p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-850 dark:hover:text-gray-200"
+										aria-label={$i18n.t('Copy shortcode')}
+										on:click={() => {
+											navigator.clipboard.writeText(`:${emoji.name}:`);
+											toast.success(t('Copied'));
+										}}
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-4" aria-hidden="true">
+											<path d="M7 3.5A1.5 1.5 0 0 1 8.5 2h6A1.5 1.5 0 0 1 16 3.5v8A1.5 1.5 0 0 1 14.5 13h-6A1.5 1.5 0 0 1 7 11.5v-8Z" />
+											<path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H6v6.5A2.5 2.5 0 0 0 8.5 14H13v.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 4 14.5v-8Z" />
+										</svg>
+									</button>
 											<button
 												type="button"
-												class="rounded-md border border-red-300/80 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/50"
+										class="rounded-lg p-2 text-red-500 transition hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/40"
+										aria-label={$i18n.t('Remove')}
 												on:click={() => removeEmoji(emoji.id)}
 											>
-												{$i18n.t('Remove')}
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-4" aria-hidden="true">
+											<path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75V4.5H3.75a.75.75 0 0 0 0 1.5h.3l.72 9.43A3 3 0 0 0 7.76 18h4.48a3 3 0 0 0 2.99-2.57L15.95 6h.3a.75.75 0 0 0 0-1.5H14v-.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM7.5 4.5v-.75c0-.69.56-1.25 1.25-1.25h2.5c.69 0 1.25.56 1.25 1.25v.75h-5Z" clip-rule="evenodd" />
+										</svg>
 											</button>
 										</div>
-									</div>
 								</div>
 							{/each}
-						</div>
 					{/if}
-				</div>
-			</div>
+			</section>
 		{:else}
 			<div class="flex h-full justify-center">
 				<div class="my-auto">

@@ -100,6 +100,7 @@
 	let adminConfig: SSOConfig | null = null;
 	let providerCards: {
 		id: string;
+		enabledKey: keyof SSOConfig;
 		label: string;
 		abbr: string;
 		enabled: boolean;
@@ -234,6 +235,7 @@
 		? [
 				{
 					id: 'google',
+					enabledKey: 'GOOGLE_OAUTH_ENABLED',
 					label: 'Google',
 					abbr: 'G',
 					enabled: adminConfig.GOOGLE_OAUTH_ENABLED,
@@ -241,6 +243,7 @@
 				},
 				{
 					id: 'microsoft',
+					enabledKey: 'MICROSOFT_OAUTH_ENABLED',
 					label: 'Microsoft',
 					abbr: 'MS',
 					enabled: adminConfig.MICROSOFT_OAUTH_ENABLED,
@@ -252,6 +255,7 @@
 				},
 				{
 					id: 'github',
+					enabledKey: 'GITHUB_OAUTH_ENABLED',
 					label: 'GitHub',
 					abbr: 'GH',
 					enabled: adminConfig.GITHUB_OAUTH_ENABLED,
@@ -259,6 +263,7 @@
 				},
 				{
 					id: 'discord',
+					enabledKey: 'DISCORD_OAUTH_ENABLED',
 					label: 'Discord',
 					abbr: 'DC',
 					enabled: adminConfig.DISCORD_OAUTH_ENABLED,
@@ -266,6 +271,7 @@
 				},
 				{
 					id: 'gitlab',
+					enabledKey: 'GITLAB_OAUTH_ENABLED',
 					label: 'GitLab',
 					abbr: 'GL',
 					enabled: adminConfig.GITLAB_OAUTH_ENABLED,
@@ -273,6 +279,7 @@
 				},
 				{
 					id: 'slack',
+					enabledKey: 'SLACK_OAUTH_ENABLED',
 					label: 'Slack',
 					abbr: 'SL',
 					enabled: adminConfig.SLACK_OAUTH_ENABLED,
@@ -280,6 +287,7 @@
 				},
 				{
 					id: 'feishu',
+					enabledKey: 'FEISHU_OAUTH_ENABLED',
 					label: 'Feishu',
 					abbr: 'FS',
 					enabled: adminConfig.FEISHU_OAUTH_ENABLED,
@@ -287,12 +295,18 @@
 				},
 				{
 					id: 'oidc',
+					enabledKey: 'OIDC_OAUTH_ENABLED',
 					label: 'OIDC',
 					abbr: 'ID',
 					enabled: adminConfig.OIDC_OAUTH_ENABLED,
 					configured: Boolean(adminConfig.OAUTH_CLIENT_ID && adminConfig.OPENID_PROVIDER_URL)
 				}
-			].sort((a, b) => Number(b.enabled) - Number(a.enabled))
+			].sort(
+				(a, b) =>
+					Number(b.enabled) - Number(a.enabled) ||
+					Number(b.configured) - Number(a.configured) ||
+					a.label.localeCompare(b.label)
+			)
 		: [];
 
 	$: enabledProviderCount = providerCards.filter((provider) => provider.enabled).length;
@@ -430,6 +444,17 @@
 		}
 	};
 
+	const updateConfigValue = (key: keyof SSOConfig, value: unknown) => {
+		if (!adminConfig) {
+			return;
+		}
+
+		adminConfig = {
+			...adminConfig,
+			[key]: value
+		};
+	};
+
 	onMount(async () => {
 		const configResponse = await getAdminConfig(localStorage.token).catch((error) => {
 			toast.error(`${error}`);
@@ -443,746 +468,169 @@
 </script>
 
 <form
-	class="flex flex-col h-full justify-between space-y-2 text-sm"
+	class="flex h-full flex-col justify-between text-sm"
 	on:submit|preventDefault={saveHandler}
+	autocomplete="off"
 >
-	<div class="space-y-3 overflow-y-scroll scrollbar-hidden h-full">
+	<div class="h-full space-y-3 overflow-y-scroll scrollbar-hidden pr-1">
 		{#if adminConfig}
-			<div class="space-y-3">
-				<div
-					class="rounded-2xl border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 p-4 space-y-4"
-				>
-					<div class="text-base font-medium">{$i18n.t('SSO Management')}</div>
-					<div class="text-xs text-gray-500 dark:text-gray-400">
-						{$i18n.t(
-							'Configure OAuth providers and advanced runtime behavior. Changes apply immediately.'
-						)}
-					</div>
-
-					<div class="grid gap-2 sm:grid-cols-2">
-						<div
-							class="rounded-lg border border-gray-200/80 dark:border-gray-800 bg-white/60 dark:bg-gray-950/40 px-3 py-2"
-						>
-							<div class="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">
-								{$i18n.t('Enabled Providers')}
-							</div>
-							<div class="text-lg font-semibold mt-0.5">
-								{enabledProviderCount}/{providerCards.length}
-							</div>
-						</div>
-						<div
-							class="rounded-lg border border-gray-200/80 dark:border-gray-800 bg-white/60 dark:bg-gray-950/40 px-3 py-2"
-						>
-							<div class="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">
-								{$i18n.t('Configured Providers')}
-							</div>
-							<div class="text-lg font-semibold mt-0.5">
-								{configuredProviderCount}/{providerCards.length}
-							</div>
+			<section class="rounded-xl border border-gray-100 dark:border-gray-850 p-3 space-y-3">
+				<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+					<div>
+						<div class="text-base font-medium">{$i18n.t('SSO Management')}</div>
+						<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+							{$i18n.t('Configure OAuth providers. Enabled and configured providers stay at the top.')}
 						</div>
 					</div>
-
-					<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-						{#each providerCards as provider}
-							<div
-								class="rounded-lg border px-2.5 py-2 transition {provider.configured
-									? 'border-emerald-200/80 bg-emerald-50/50 dark:border-emerald-900/60 dark:bg-emerald-950/20'
-									: 'border-gray-200/80 bg-white/70 dark:border-gray-800 dark:bg-gray-950/30'}"
-							>
-								<div class="flex items-center gap-2">
-									<div
-										class="size-6 rounded-md bg-gray-900/5 dark:bg-gray-100/10 flex items-center justify-center text-[10px] font-bold"
-									>
-										{provider.abbr}
-									</div>
-									<div class="text-xs font-medium truncate">{provider.label}</div>
-								</div>
-								<div class="mt-1.5 text-[11px] text-gray-500 dark:text-gray-400">
-									{provider.enabled ? $i18n.t('Enabled') : $i18n.t('Disabled')}
-									-
-									{provider.configured ? $i18n.t('Configured') : $i18n.t('Missing keys')}
-								</div>
-							</div>
-						{/each}
-					</div>
-
-					<div class="grid gap-3 sm:grid-cols-2">
-						<div
-							class="rounded-lg border border-gray-200/80 dark:border-gray-800 px-2.5 py-2 flex items-center justify-between gap-3"
-						>
-							<div>
-								<div class="text-sm font-medium">{$i18n.t('Merge Accounts By Email')}</div>
-								<div class="text-xs text-gray-500 dark:text-gray-400">
-									{$i18n.t('Link OAuth users to existing accounts with matching emails.')}
-								</div>
-							</div>
-							<Switch bind:state={adminConfig.OAUTH_MERGE_ACCOUNTS_BY_EMAIL} />
-						</div>
-
-						<div class="rounded-lg border border-gray-200/80 dark:border-gray-800 px-2.5 py-2 space-y-1.5">
-							<div class="text-sm font-medium">{$i18n.t('OAuth Timeout (seconds)')}</div>
-							<input
-								type="text"
-								bind:value={adminConfig.OAUTH_TIMEOUT}
-								class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-								placeholder="30"
-							/>
-						</div>
-
-						<div
-							class="rounded-lg border border-gray-200/80 dark:border-gray-800 px-2.5 py-2 space-y-1.5 sm:col-span-2"
-						>
-							<div class="text-sm font-medium">{$i18n.t('OAuth Audience')}</div>
-							<input
-								type="text"
-								bind:value={adminConfig.OAUTH_AUDIENCE}
-								class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							/>
-						</div>
+					<div class="flex shrink-0 gap-2 text-xs text-gray-500 dark:text-gray-400">
+						<span class="rounded-lg bg-gray-50 px-2 py-1 dark:bg-gray-850">
+							{enabledProviderCount}/{providerCards.length} {$i18n.t('enabled')}
+						</span>
+						<span class="rounded-lg bg-gray-50 px-2 py-1 dark:bg-gray-850">
+							{configuredProviderCount}/{providerCards.length} {$i18n.t('configured')}
+						</span>
 					</div>
 				</div>
 
-				<details
-					open
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 48 48"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<path
-									fill="#EA4335"
-									d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-								/><path
-									fill="#4285F4"
-									d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-								/><path
-									fill="#FBBC05"
-									d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-								/><path
-									fill="#34A853"
-									d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-								/>
-							</svg>
-							<span>Google</span>
+				<div class="grid gap-2 md:grid-cols-2">
+					<label class="flex items-center justify-between gap-3 rounded-lg border border-gray-100 px-3 py-2 dark:border-gray-850">
+						<span>
+							<span class="block text-sm font-medium">{$i18n.t('SSO Logins')}</span>
+							<span class="block text-xs text-gray-500 dark:text-gray-400">{$i18n.t('Allow users to sign in with enabled providers.')}</span>
 						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable Google')}</div>
-							<Switch bind:state={adminConfig.GOOGLE_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.GOOGLE_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.GOOGLE_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GOOGLE_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GOOGLE_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GOOGLE_SERVER_METADATA_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1 sm:col-span-2"
-							placeholder="Server metadata URL"
-						/>
-					</div>
-				</details>
+						<Switch bind:state={adminConfig.ENABLE_OAUTH_LOGIN} />
+					</label>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 24 24"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<path
-									fill="#E24329"
-									d="m22.5 9.5-2.1-6.5a.8.8 0 0 0-.76-.54H4.36a.8.8 0 0 0-.76.54L1.5 9.5a1.43 1.43 0 0 0 .52 1.6l9.47 7.02 9.47-7.02a1.43 1.43 0 0 0 .52-1.6Z"
-								/>
-								<path fill="#FC6D26" d="M12 18.2 15.5 7.4h-7L12 18.2Z" />
-								<path fill="#FCA326" d="M8.5 7.4 6.9 2.5H4.3l4.2 4.9Z" />
-							</svg>
-							<span>GitLab</span>
+					<label class="flex items-center justify-between gap-3 rounded-lg border border-gray-100 px-3 py-2 dark:border-gray-850">
+						<span>
+							<span class="block text-sm font-medium">{$i18n.t('SSO Registration')}</span>
+							<span class="block text-xs text-gray-500 dark:text-gray-400">{$i18n.t('Allow new accounts from enabled providers.')}</span>
 						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable GitLab')}</div>
-							<Switch bind:state={adminConfig.GITLAB_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.GITLAB_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_AUTHORIZE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Authorize URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_ACCESS_TOKEN_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Access token URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_API_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="API base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITLAB_USERINFO_ENDPOINT}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Userinfo endpoint"
-						/>
-					</div>
-				</details>
+						<Switch bind:state={adminConfig.ENABLE_OAUTH_SIGNUP} />
+					</label>
+				</div>
+			</section>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 24 24"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<path
-									fill="#4A154B"
-									d="M6.3 15.2a2 2 0 1 1-2 2h2v-2Zm1 0h3v2a2 2 0 1 1-2-2h-1v-0Zm1-8a2 2 0 1 1 2 2h-2v-2Zm0 1h2.9v3H8.3a2 2 0 1 1 0-3Zm8 1a2 2 0 1 1 2-2v2h-2Zm-1 0V6.3h2v2.9a2 2 0 1 1-2 0Zm1 8a2 2 0 1 1-2-2h2v2Zm-1-1h-2.9v-3h2.9a2 2 0 1 1 0 3Z"
-								/>
-							</svg>
-							<span>Slack</span>
-						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable Slack')}</div>
-							<Switch bind:state={adminConfig.SLACK_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.SLACK_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_AUTHORIZE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Authorize URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_ACCESS_TOKEN_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Access token URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_API_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="API base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.SLACK_USERINFO_ENDPOINT}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Userinfo endpoint"
-						/>
-					</div>
-				</details>
+			<section class="space-y-2">
+				{#each providerCards as provider (provider.id)}
+					{@const config = providerConfigs[provider.id]}
+					<details
+						class="rounded-xl border border-gray-100 dark:border-gray-850 p-0 overflow-hidden bg-white/50 dark:bg-gray-900/30"
+					>
+						<summary class="list-none cursor-pointer px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-850/60">
+							<div class="flex items-center justify-between gap-3">
+								<div class="flex min-w-0 items-center gap-2.5">
+									<div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-700 dark:bg-gray-850 dark:text-gray-200">
+										{@html config.icon}
+									</div>
+									<div class="min-w-0">
+										<div class="truncate text-sm font-medium">{config.label}</div>
+										<div class="mt-0.5 flex flex-wrap gap-1.5 text-[11px]">
+											<span class="rounded-md px-1.5 py-0.5 {provider.enabled ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-gray-50 text-gray-500 dark:bg-gray-850 dark:text-gray-400'}">
+												{provider.enabled ? $i18n.t('Enabled') : $i18n.t('Disabled')}
+											</span>
+											<span class="rounded-md px-1.5 py-0.5 {provider.configured ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'}">
+												{provider.configured ? $i18n.t('Configured') : $i18n.t('Missing keys')}
+											</span>
+										</div>
+									</div>
+								</div>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 21 21"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<rect x="1" y="1" width="9" height="9" fill="#f25022" />
-								<rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
-								<rect x="11" y="1" width="9" height="9" fill="#7fba00" />
-								<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
-							</svg>
-							<span>Microsoft</span>
-						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable Microsoft')}</div>
-							<Switch bind:state={adminConfig.MICROSOFT_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.MICROSOFT_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_CLIENT_TENANT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Tenant ID"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_CLIENT_LOGIN_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Login base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.MICROSOFT_CLIENT_PICTURE_URL}
-							class="w-full bg-transparent text-xs outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-2 py-1 sm:col-span-2"
-							placeholder="Picture URL"
-						/>
-					</div>
-				</details>
+								<div class="flex shrink-0 items-center gap-3" on:click|stopPropagation>
+									<Switch
+										state={Boolean(adminConfig[provider.enabledKey])}
+										on:change={(event) => updateConfigValue(provider.enabledKey, event.detail)}
+									/>
+								</div>
+							</div>
+						</summary>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 24 24"
-								class="size-4"
-								fill="currentColor"
-								aria-hidden="true"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M12.006 2a9.847 9.847 0 0 0-6.484 2.44 10.32 10.32 0 0 0-3.393 6.17 10.48 10.48 0 0 0 1.317 6.955 10.045 10.045 0 0 0 5.4 4.418c.504.095.683-.223.683-.494 0-.245-.01-1.052-.014-1.908-2.78.62-3.366-1.21-3.366-1.21a2.711 2.711 0 0 0-1.11-1.5c-.907-.637.07-.621.07-.621.317.044.62.163.885.346.266.183.487.426.647.71.135.253.318.476.538.655a2.079 2.079 0 0 0 2.37.196c.045-.52.27-1.006.635-1.37-2.219-.259-4.554-1.138-4.554-5.07a4.022 4.022 0 0 1 1.031-2.75 3.77 3.77 0 0 1 .096-2.713s.839-.275 2.749 1.05a9.26 9.26 0 0 1 5.004 0c1.906-1.325 2.74-1.05 2.74-1.05.37.858.406 1.828.101 2.713a4.017 4.017 0 0 1 1.029 2.75c0 3.939-2.339 4.805-4.564 5.058a2.471 2.471 0 0 1 .679 1.897c0 1.372-.012 2.477-.012 2.814 0 .272.18.592.687.492a10.05 10.05 0 0 0 5.388-4.421 10.473 10.473 0 0 0 1.313-6.948 10.32 10.32 0 0 0-3.39-6.165A9.847 9.847 0 0 0 12.007 2Z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-							<span>GitHub</span>
-						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable GitHub')}</div>
-							<Switch bind:state={adminConfig.GITHUB_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.GITHUB_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_CLIENT_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_CLIENT_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_AUTHORIZE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Authorize URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_ACCESS_TOKEN_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Access token URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_API_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="API base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.GITHUB_USERINFO_ENDPOINT}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Userinfo endpoint"
-						/>
-					</div>
-				</details>
+						<div class="border-t border-gray-100 p-3 dark:border-gray-850">
+							<div class="grid gap-2 sm:grid-cols-2">
+								{#each config.fields as field}
+									<div class={field.span === 2 ? 'sm:col-span-2' : ''}>
+											<label
+												for="{provider.id}-{field.key}"
+												class="mb-1 block text-[11px] font-medium text-gray-500 dark:text-gray-400"
+											>
+												{field.placeholder}
+											</label>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 256 199"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<path
-									fill="currentColor"
-									d="M216.9 16.6A208.5 208.5 0 0 0 163.3 0a150.5 150.5 0 0 0-6.8 13.9a193.2 193.2 0 0 0-57 0A150.5 150.5 0 0 0 92.7 0A208.5 208.5 0 0 0 39.1 16.6C5.2 67.5-3.9 117.1.6 165.8a209.9 209.9 0 0 0 64.7 33.2a161.8 161.8 0 0 0 13.9-22.6a133.7 133.7 0 0 1-21.9-10.5c1.9-1.4 3.7-2.8 5.4-4.3c42.3 19.8 88.2 19.8 130 0c1.8 1.5 3.6 2.9 5.4 4.3a133.7 133.7 0 0 1-21.9 10.5a161.8 161.8 0 0 0 13.9 22.6a209.9 209.9 0 0 0 64.7-33.2c5.3-56.4-9.1-105.5-37.9-149.2ZM85.5 135.6c-12.6 0-22.9-11.6-22.9-25.8s10.1-25.8 22.9-25.8s23.1 11.6 22.9 25.8s-10.2 25.8-22.9 25.8Zm84.9 0c-12.6 0-22.9-11.6-22.9-25.8s10.1-25.8 22.9-25.8s23.1 11.6 22.9 25.8s-10.2 25.8-22.9 25.8Z"
-								/>
-							</svg>
-							<span>Discord</span>
-						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable Discord')}</div>
-							<Switch bind:state={adminConfig.DISCORD_OAUTH_ENABLED} />
+										{#if field.type === 'select'}
+												<select
+													id="{provider.id}-{field.key}"
+													class="w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-2 text-xs outline-hidden dark:border-gray-850 dark:bg-gray-900"
+												value={String(adminConfig[field.key] ?? '')}
+												autocomplete="off"
+												on:change={(event) => updateConfigValue(field.key, event.currentTarget.value)}
+											>
+												{#each field.options ?? [] as option}
+													<option value={option}>{option || $i18n.t('None')}</option>
+												{/each}
+											</select>
+										{:else}
+												<input
+													id="{provider.id}-{field.key}"
+													type={field.type === 'password' ? 'password' : 'text'}
+												value={String(adminConfig[field.key] ?? '')}
+												class="w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-2 text-xs outline-hidden placeholder:text-gray-300 focus:border-gray-300 dark:border-gray-850 dark:placeholder:text-gray-700 dark:focus:border-gray-700"
+												placeholder={field.placeholder}
+												autocomplete="new-password"
+												spellcheck="false"
+												autocapitalize="off"
+												on:input={(event) => updateConfigValue(field.key, event.currentTarget.value)}
+											/>
+										{/if}
+									</div>
+								{/each}
+							</div>
 						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.DISCORD_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_AUTHORIZE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Authorize URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_ACCESS_TOKEN_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Access token URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_API_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="API base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.DISCORD_USERINFO_ENDPOINT}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Userinfo endpoint"
-						/>
-					</div>
-				</details>
+					</details>
+				{/each}
+			</section>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke-width="1.5"
-								stroke="currentColor"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"
-								/>
-							</svg>
-							<span>OIDC</span>
-						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable OIDC')}</div>
-							<Switch bind:state={adminConfig.OIDC_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_PROVIDER_NAME}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Provider name"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.OAUTH_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OPENID_PROVIDER_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Provider URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OPENID_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_SCOPES}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_TOKEN_ENDPOINT_AUTH_METHOD}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Token endpoint auth method"
-						/>
-						<select
-							bind:value={adminConfig.OAUTH_CODE_CHALLENGE_METHOD}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-						>
-							<option value="">{$i18n.t('None')}</option>
-							<option value="S256">S256</option>
-						</select>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_SUB_CLAIM}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Sub claim"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_USERNAME_CLAIM}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Username claim"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_EMAIL_CLAIM}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Email claim"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_PICTURE_CLAIM}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Picture claim"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.OAUTH_GROUPS_CLAIM}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Groups claim"
-						/>
+			<section class="rounded-xl border border-gray-100 dark:border-gray-850 p-3 space-y-3">
+				<div>
+					<div class="text-sm font-medium">{$i18n.t('Advanced')}</div>
+					<div class="text-xs text-gray-500 dark:text-gray-400">
+						{$i18n.t('Only change these when your provider requires them.')}
 					</div>
-				</details>
+				</div>
 
-				<details
-					class="rounded-lg border border-gray-100/80 dark:border-gray-850/80 bg-gray-50/40 dark:bg-gray-900/40 px-2.5 py-1.5 space-y-1.5"
-				>
-					<summary class="cursor-pointer text-xs font-medium">
-						<span class="inline-flex items-center gap-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 24 24"
-								class="size-4"
-								aria-hidden="true"
-							>
-								<rect x="3" y="3" width="8" height="8" rx="2" fill="#00C4CC" />
-								<rect x="13" y="3" width="8" height="8" rx="2" fill="#3370FF" />
-								<rect x="3" y="13" width="8" height="8" rx="2" fill="#14C180" />
-								<rect x="13" y="13" width="8" height="8" rx="2" fill="#FF8A00" />
-							</svg>
-							<span>Feishu</span>
+				<div class="grid gap-2 md:grid-cols-3">
+					<label class="flex items-center justify-between gap-3 rounded-lg border border-gray-100 px-3 py-2 dark:border-gray-850 md:col-span-1">
+						<span>
+							<span class="block text-xs font-medium">{$i18n.t('Merge by Email')}</span>
+							<span class="block text-[11px] text-gray-500 dark:text-gray-400">{$i18n.t('Link matching existing users.')}</span>
 						</span>
-					</summary>
-					<div class="grid gap-1.5 sm:grid-cols-2 pt-1.5">
-						<div
-							class="rounded-md border border-gray-200/80 dark:border-gray-800 px-2 py-1.5 flex items-center justify-between gap-2 sm:col-span-2"
-						>
-							<div class="text-xs font-medium">{$i18n.t('Enable Feishu')}</div>
-							<Switch bind:state={adminConfig.FEISHU_OAUTH_ENABLED} />
-						</div>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_CLIENT_ID}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client ID"
-						/>
-						<input
-							type="password"
-							bind:value={adminConfig.FEISHU_CLIENT_SECRET}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Client Secret"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_OAUTH_SCOPE}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Scopes"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_REDIRECT_URI}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Redirect URI"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_AUTHORIZE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Authorize URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_ACCESS_TOKEN_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Access token URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_API_BASE_URL}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="API base URL"
-						/>
-						<input
-							type="text"
-							bind:value={adminConfig.FEISHU_USERINFO_ENDPOINT}
-							class="w-full bg-transparent text-[11px] outline-hidden border border-gray-200/70 dark:border-gray-850/70 rounded-md px-1.5 py-1"
-							placeholder="Userinfo endpoint"
+						<Switch bind:state={adminConfig.OAUTH_MERGE_ACCOUNTS_BY_EMAIL} />
+					</label>
+
+					<div>
+							<label for="oauth-timeout-input" class="mb-1 block text-[11px] font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Timeout')}</label>
+							<input
+								id="oauth-timeout-input"
+								type="text"
+							bind:value={adminConfig.OAUTH_TIMEOUT}
+							class="w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-2 text-xs outline-hidden dark:border-gray-850"
+							placeholder="30"
+							autocomplete="off"
 						/>
 					</div>
-				</details>
-			</div>
+
+					<div>
+							<label for="oauth-audience-input" class="mb-1 block text-[11px] font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Audience')}</label>
+							<input
+								id="oauth-audience-input"
+								type="text"
+							bind:value={adminConfig.OAUTH_AUDIENCE}
+							class="w-full rounded-lg border border-gray-100 bg-transparent px-2.5 py-2 text-xs outline-hidden dark:border-gray-850"
+							placeholder={$i18n.t('Optional')}
+							autocomplete="off"
+						/>
+					</div>
+				</div>
+			</section>
 		{:else}
 			<div class="flex h-full justify-center">
 				<div class="my-auto">

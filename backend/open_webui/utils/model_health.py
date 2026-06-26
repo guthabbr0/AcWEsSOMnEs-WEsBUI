@@ -42,8 +42,8 @@ def build_internal_request(app) -> Request:
     )
 
 
-def get_model_health_user() -> Optional[UserModel]:
-    user = Users.get_first_user()
+async def get_model_health_user() -> Optional[UserModel]:
+    user = await Users.get_first_user()
     if user is None:
         return None
 
@@ -65,7 +65,7 @@ def is_model_health_candidate(model: dict) -> bool:
 
 async def get_enabled_models_for_health(app, refresh: bool = False) -> list[dict]:
     request = build_internal_request(app)
-    user = get_model_health_user()
+    user = await get_model_health_user()
     models = await get_all_models(request, refresh=refresh, user=user)
 
     candidates = [model for model in models if is_model_health_candidate(model)]
@@ -124,7 +124,7 @@ async def run_single_model_health_check(app, user: UserModel, model: dict) -> Mo
 
 async def run_model_health_checks(app, refresh_models: bool = True) -> list[ModelHealthCheckForm]:
     models = await get_enabled_models_for_health(app, refresh=refresh_models)
-    user = get_model_health_user()
+    user = await get_model_health_user()
 
     if not models or user is None:
         app.state.model_health_last_run_at = None
@@ -138,8 +138,8 @@ async def run_model_health_checks(app, refresh_models: bool = True) -> list[Mode
 
     checks = await asyncio.gather(*(worker(model) for model in models))
 
-    ModelHealthChecks.insert_checks(checks)
-    ModelHealthChecks.delete_checks_before(int(time.time()) - MODEL_HEALTH_RETENTION_SECONDS)
+    await ModelHealthChecks.insert_checks(checks)
+    await ModelHealthChecks.delete_checks_before(int(time.time()) - MODEL_HEALTH_RETENTION_SECONDS)
 
     latest_run_at = max((check.checked_at or 0) for check in checks) if checks else None
     app.state.model_health_last_run_at = latest_run_at
@@ -148,7 +148,7 @@ async def run_model_health_checks(app, refresh_models: bool = True) -> list[Mode
 
 
 async def maybe_run_model_health_checks(app, refresh_models: bool = True) -> list[ModelHealthCheckForm]:
-    latest_check_at = ModelHealthChecks.get_latest_check_at()
+    latest_check_at = await ModelHealthChecks.get_latest_check_at()
     now = int(time.time())
 
     if latest_check_at and (now - latest_check_at) < (MODEL_HEALTH_CHECK_INTERVAL_SECONDS - 60):

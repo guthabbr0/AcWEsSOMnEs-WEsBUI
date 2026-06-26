@@ -40,7 +40,16 @@ export enum Shortcut {
 	REGENERATE_RESPONSE = 'regenerateResponse',
 	COPY_LAST_CODE_BLOCK = 'copyLastCodeBlock',
 	COPY_LAST_RESPONSE = 'copyLastResponse',
-	STOP_GENERATING = 'stopGenerating'
+	STOP_GENERATING = 'stopGenerating',
+	EDIT_CHANNEL_MESSAGE = 'editChannelMessage',
+	DELETE_CHANNEL_MESSAGE = 'deleteChannelMessage',
+	REPLY_CHANNEL_MESSAGE = 'replyChannelMessage',
+	PIN_CHANNEL_MESSAGE = 'pinChannelMessage',
+	REACT_CHANNEL_MESSAGE = 'reactChannelMessage',
+	COPY_CHANNEL_MESSAGE = 'copyChannelMessage',
+
+	//Voice
+	TOGGLE_MUTE = 'toggleMute'
 }
 
 export const shortcuts: ShortcutRegistry = {
@@ -164,5 +173,49 @@ export const shortcuts: ShortcutRegistry = {
 		name: 'Copy Last Code Block',
 		keys: ['mod', 'shift', ';'],
 		category: 'Message'
+	},
+	[Shortcut.EDIT_CHANNEL_MESSAGE]: {
+		name: 'Edit Channel Message',
+		keys: ['E'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+	[Shortcut.DELETE_CHANNEL_MESSAGE]: {
+		name: 'Delete Channel Message',
+		keys: ['Backspace'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+	[Shortcut.REPLY_CHANNEL_MESSAGE]: {
+		name: 'Reply to Channel Message',
+		keys: ['R'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+	[Shortcut.PIN_CHANNEL_MESSAGE]: {
+		name: 'Pin Channel Message',
+		keys: ['P'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+	[Shortcut.REACT_CHANNEL_MESSAGE]: {
+		name: 'Add Reaction',
+		keys: ['+'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+	[Shortcut.COPY_CHANNEL_MESSAGE]: {
+		name: 'Copy Channel Message Text',
+		keys: ['mod', 'C'],
+		category: 'Channel Message',
+		tooltip: 'Only active when focused on a channel message.'
+	},
+
+	//Voice
+	[Shortcut.TOGGLE_MUTE]: {
+		name: 'Toggle Mute',
+		keys: ['M'],
+		category: 'Voice',
+		tooltip: 'Only active during Voice Mode.'
 	}
 };

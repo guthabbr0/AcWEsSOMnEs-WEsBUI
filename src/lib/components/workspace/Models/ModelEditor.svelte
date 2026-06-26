@@ -6,6 +6,7 @@
 	import { WEBUI_BASE_URL, DEFAULT_CAPABILITIES } from '$lib/constants';
 
 	import { getTools } from '$lib/apis/tools';
+	import { getSkills } from '$lib/apis/skills';
 	import { getFunctions } from '$lib/apis/functions';
 	import { getModelsDefaults } from '$lib/apis/configs';
 
@@ -24,11 +25,11 @@
 	import DefaultFeatures from './DefaultFeatures.svelte';
 	import BuiltinTools from './BuiltinTools.svelte';
 	import PromptSuggestions from './PromptSuggestions.svelte';
+	import TerminalSelector from './TerminalSelector.svelte';
+	import AccessControlModal from '../common/AccessControlModal.svelte';
 	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 	import { updateModelAccessGrants } from '$lib/apis/models';
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
-	import { DropdownMenu } from 'bits-ui';
-	import { flyAndScale } from '$lib/utils/transitions';
 
 	const i18n = getContext('i18n');
 
@@ -93,6 +94,7 @@
 	let knowledge = [];
 	let toolIds = [];
 	let skillIds = [];
+	let skillsList = [];
 
 	let filterIds = [];
 	let defaultFilterIds = [];
@@ -103,7 +105,12 @@
 
 	let actionIds = [];
 	let accessGrants = [];
+	let terminalId = '';
 	let tts = { voice: '' };
+	let rateLimits = {
+		requests_per_minute: '',
+		requests_per_day: ''
+	};
 
 	const onAccessControlChange = async () => {
 		if (edit && model?.id) {
@@ -223,6 +230,14 @@
 			}
 		}
 
+		if (terminalId) {
+			info.meta.terminalId = terminalId;
+		} else {
+			if (info.meta.terminalId) {
+				delete info.meta.terminalId;
+			}
+		}
+
 		if (tts.voice !== '') {
 			if (!info.meta.tts) info.meta.tts = {};
 			info.meta.tts.voice = tts.voice;
@@ -233,6 +248,14 @@
 					delete info.meta.tts;
 				}
 			}
+		}
+
+		info.meta.rate_limits = {
+			requests_per_minute: Number(rateLimits.requests_per_minute) || null,
+			requests_per_day: Number(rateLimits.requests_per_day) || null
+		};
+		if (!info.meta.rate_limits.requests_per_minute && !info.meta.rate_limits.requests_per_day) {
+			delete info.meta.rate_limits;
 		}
 
 		info.params.system = system.trim() === '' ? null : system;
@@ -255,6 +278,7 @@
 
 	onMount(async () => {
 		await tools.set(await getTools(localStorage.token));
+		skillsList = (await getSkills(localStorage.token).catch(() => null)) ?? [];
 		await functions.set(await getFunctions(localStorage.token));
 
 		// Fetch admin-configured default model metadata so the editor
@@ -333,7 +357,16 @@
 			capabilities = { ...capabilities, ...(model?.meta?.capabilities ?? {}) };
 			defaultFeatureIds = model?.meta?.defaultFeatureIds ?? defaultFeatureIds;
 			builtinTools = model?.meta?.builtinTools ?? builtinTools;
+			terminalId = model?.meta?.terminalId ?? '';
 			tts = { voice: model?.meta?.tts?.voice ?? '' };
+			rateLimits = {
+				requests_per_minute: model?.meta?.rate_limits?.requests_per_minute
+					? String(model.meta.rate_limits.requests_per_minute)
+					: '',
+				requests_per_day: model?.meta?.rate_limits?.requests_per_day
+					? String(model.meta.rate_limits.requests_per_day)
+					: ''
+			};
 
 			accessGrants = model?.access_grants ?? [];
 
@@ -577,12 +610,8 @@
 										</button>
 
 										<div slot="content">
-											<DropdownMenu.Content
+											<div
 												class="w-[min(92vw,430px)] rounded-2xl p-2 border border-gray-100 dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg"
-												sideOffset={8}
-												side="bottom"
-												align="end"
-												transition={flyAndScale}
 											>
 												<div class="max-h-[65vh] overflow-y-auto px-2 py-1">
 													<AccessControl
@@ -594,7 +623,7 @@
 														onChange={onAccessControlChange}
 													/>
 												</div>
-											</DropdownMenu.Content>
+											</div>
 										</div>
 									</Dropdown>
 								</div>
@@ -773,7 +802,7 @@
 					</div>
 
 					<div class="my-4">
-						<SkillsSelector bind:selectedSkillIds={skillIds} />
+						<SkillsSelector bind:selectedSkillIds={skillIds} skills={skillsList} />
 					</div>
 
 					{#if ($functions ?? []).filter((func) => func.type === 'filter').length > 0 || ($functions ?? []).filter((func) => func.type === 'action').length > 0}
@@ -840,6 +869,46 @@
 							<BuiltinTools bind:builtinTools />
 						</div>
 					{/if}
+
+					{#if capabilities.terminal}
+						<div class="my-4">
+							<TerminalSelector bind:terminalId />
+						</div>
+					{/if}
+
+					<div class="my-4">
+						<div class="flex w-full justify-between mb-1">
+							<div class="self-center text-xs font-medium text-gray-500">
+								{$i18n.t('Usage Limits')}
+							</div>
+						</div>
+						<div class="grid gap-2 sm:grid-cols-2">
+							<label class="rounded-xl border border-gray-100 px-3 py-2 dark:border-gray-850">
+								<span class="mb-1 block text-xs text-gray-500">
+									{$i18n.t('Requests per minute')}
+								</span>
+								<input
+									class="w-full bg-transparent text-sm outline-hidden"
+									type="number"
+									min="0"
+									placeholder={$i18n.t('Unlimited')}
+									bind:value={rateLimits.requests_per_minute}
+								/>
+							</label>
+							<label class="rounded-xl border border-gray-100 px-3 py-2 dark:border-gray-850">
+								<span class="mb-1 block text-xs text-gray-500">
+									{$i18n.t('Requests per day')}
+								</span>
+								<input
+									class="w-full bg-transparent text-sm outline-hidden"
+									type="number"
+									min="0"
+									placeholder={$i18n.t('Unlimited')}
+									bind:value={rateLimits.requests_per_day}
+								/>
+							</label>
+						</div>
+					</div>
 
 					<div class="my-4">
 						<div class="flex w-full justify-between mb-1">

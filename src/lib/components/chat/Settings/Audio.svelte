@@ -19,6 +19,10 @@
 	let speechAutoSend = false;
 	let responseAutoPlayback = false;
 	let nonLocalVoices = false;
+	let notificationSound = true;
+	let notificationSoundAlways = false;
+	let generalNotificationSoundId = '';
+	let chatCompletionSoundId = '';
 
 	let STTEngine = '';
 	let STTLanguage = '';
@@ -82,11 +86,51 @@
 		saveSettings({ speechAutoSend: speechAutoSend });
 	};
 
+	const getNotificationSoundsByType = (type: 'channel' | 'chat_completion') => {
+		if (!Array.isArray($config?.ui?.notification_sounds)) {
+			return [];
+		}
+
+		return $config.ui.notification_sounds.filter(
+			(sound) => sound?.type === type && typeof sound?.id === 'string'
+		);
+	};
+
+	const saveNotificationSoundPreferences = () => {
+		const notifications = { ...($settings?.notifications ?? {}) };
+		const sounds = { ...(notifications?.sounds ?? {}) };
+
+		if (generalNotificationSoundId) {
+			sounds.global_channel_sound_id = generalNotificationSoundId;
+		} else {
+			delete sounds.global_channel_sound_id;
+		}
+
+		if (chatCompletionSoundId) {
+			sounds.chat_completion_sound_id = chatCompletionSoundId;
+		} else {
+			delete sounds.chat_completion_sound_id;
+		}
+
+		saveSettings({
+			notifications: {
+				...notifications,
+				sounds
+			}
+		});
+	};
+
 	onMount(async () => {
 		playbackRate = $settings.audio?.tts?.playbackRate ?? 1;
 		conversationMode = $settings.conversationMode ?? false;
 		speechAutoSend = $settings.speechAutoSend ?? false;
 		responseAutoPlayback = $settings.responseAutoPlayback ?? false;
+		notificationSound = $settings?.notificationSound ?? true;
+		notificationSoundAlways = $settings?.notificationSoundAlways ?? false;
+		generalNotificationSoundId = String($settings?.notifications?.sounds?.global_channel_sound_id ?? '');
+		chatCompletionSoundId = String(
+			$settings?.notifications?.sounds?.chat_completion_sound_id ?? ''
+		);
 
 		STTEngine = $settings?.audio?.stt?.engine ?? '';
 		STTLanguage = $settings?.audio?.stt?.language ?? '';
@@ -176,6 +220,80 @@
 	}}
 >
 	<div class=" space-y-3 overflow-y-scroll max-h-[28rem] md:max-h-full">
+		<div>
+			<div class=" mb-1 text-sm font-medium">{$i18n.t('Notifications')}</div>
+
+			<div class=" py-0.5 flex w-full justify-between">
+				<div id="notification-sound-label" class=" self-center text-xs font-medium">
+					{$i18n.t('Notification Sound')}
+				</div>
+
+				<div class="flex items-center gap-2 p-1">
+					<Switch
+						ariaLabelledbyId="notification-sound-label"
+						tooltip={true}
+						bind:state={notificationSound}
+						on:change={() => {
+							saveSettings({ notificationSound });
+						}}
+					/>
+				</div>
+			</div>
+
+			{#if notificationSound}
+				<div class=" py-0.5 flex w-full justify-between">
+					<div id="play-notification-sound-label" class=" self-center text-xs font-medium">
+						{$i18n.t('Always Play Notification Sound')}
+					</div>
+
+					<div class="flex items-center gap-2 p-1">
+						<Switch
+							ariaLabelledbyId="play-notification-sound-label"
+							tooltip={true}
+							bind:state={notificationSoundAlways}
+							on:change={() => {
+								saveSettings({ notificationSoundAlways });
+							}}
+						/>
+					</div>
+				</div>
+
+				<div class="py-0.5">
+					<div class="flex w-full justify-between items-start gap-4">
+						<div class="self-center text-xs font-medium">{$i18n.t('General Notification')}</div>
+						<select
+							class="bg-transparent border border-gray-200/70 dark:border-gray-800 rounded-md px-2 py-1 text-xs max-w-56 text-right"
+							bind:value={generalNotificationSoundId}
+							on:change={saveNotificationSoundPreferences}
+						>
+							<option value="">{$i18n.t('System default')}</option>
+							{#each getNotificationSoundsByType('channel') as sound (sound.id)}
+								<option value={sound.id}>{sound.name}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+
+				<div class="py-0.5">
+					<div class="flex w-full justify-between items-start gap-4">
+						<div class="self-center text-xs font-medium">{$i18n.t('Chat Completion')}</div>
+						<select
+							class="bg-transparent border border-gray-200/70 dark:border-gray-800 rounded-md px-2 py-1 text-xs max-w-56 text-right"
+							bind:value={chatCompletionSoundId}
+							on:change={saveNotificationSoundPreferences}
+						>
+							<option value="">{$i18n.t('System default')}</option>
+							{#each getNotificationSoundsByType('chat_completion') as sound (sound.id)}
+								<option value={sound.id}>{sound.name}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		<hr class=" border-gray-100/30 dark:border-gray-850/30" />
+
 		<div>
 			<div class=" mb-1 text-sm font-medium">{$i18n.t('STT Settings')}</div>
 

@@ -6,7 +6,6 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Cog6 from '$lib/components/icons/Cog6.svelte';
 	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
-	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 
 	export let onDelete: () => void = () => {};
 	export let onSubmit: (connection?: any) => void = () => {};
@@ -38,13 +37,6 @@
 		: [];
 </script>
 
-<ConfirmDialog
-	bind:show={showDeleteConfirmDialog}
-	on:confirm={() => {
-		onDelete();
-	}}
-/>
-
 <AddConnectionModal
 	edit
 	bind:show={showConfigModal}
@@ -54,7 +46,8 @@
 		config
 	}}
 	onDelete={() => {
-		showDeleteConfirmDialog = true;
+		onDelete();
+		showConfigModal = false;
 	}}
 	onSubmit={(connection) => {
 		url = connection.url;

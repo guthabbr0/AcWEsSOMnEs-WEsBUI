@@ -38,11 +38,6 @@
 	let defaultModelId = '';
 	let showUsername = false;
 
-	let notificationSound = true;
-	let notificationSoundAlways = false;
-	let globalChannelSoundId = '';
-	let chatCompletionSoundId = '';
-
 	let highContrastMode = false;
 
 	let detectArtifacts = true;
@@ -71,6 +66,8 @@
 	let temporaryChatByDefault = false;
 	let chatFadeStreamingText = true;
 	let collapseCodeBlocks = false;
+	let renderMarkdownInUserMessages = true;
+	let renderMarkdownInAssistantMessages = true;
 	let expandDetails = false;
 	let renderMarkdownInPreviews = true;
 	let showChatTitleInTab = true;
@@ -105,40 +102,6 @@
 	let showManageImageCompressionModal = false;
 
 	let textScale = null;
-
-	const getNotificationSoundsByType = (type: 'channel' | 'chat_completion') => {
-		if (!Array.isArray($config?.ui?.notification_sounds)) {
-			return [];
-		}
-
-		return $config.ui.notification_sounds.filter(
-			(sound) => sound?.type === type && typeof sound?.id === 'string'
-		);
-	};
-
-	const saveNotificationSoundPreferences = () => {
-		const notifications = { ...($settings?.notifications ?? {}) };
-		const sounds = { ...(notifications?.sounds ?? {}) };
-
-		if (globalChannelSoundId) {
-			sounds.global_channel_sound_id = globalChannelSoundId;
-		} else {
-			delete sounds.global_channel_sound_id;
-		}
-
-		if (chatCompletionSoundId) {
-			sounds.chat_completion_sound_id = chatCompletionSoundId;
-		} else {
-			delete sounds.chat_completion_sound_id;
-		}
-
-		saveSettings({
-			notifications: {
-				...notifications,
-				sounds
-			}
-		});
-	};
 
 	const toggleLandingPageMode = async () => {
 		landingPageMode = landingPageMode === '' ? 'chat' : '';
@@ -268,6 +231,8 @@
 		copyFormatted = $settings?.copyFormatted ?? false;
 
 		collapseCodeBlocks = $settings?.collapseCodeBlocks ?? false;
+		renderMarkdownInUserMessages = $settings?.renderMarkdownInUserMessages ?? true;
+		renderMarkdownInAssistantMessages = $settings?.renderMarkdownInAssistantMessages ?? true;
 		expandDetails = $settings?.expandDetails ?? false;
 		renderMarkdownInPreviews = $settings?.renderMarkdownInPreviews ?? true;
 
@@ -281,13 +246,6 @@
 		chatDirection = $settings?.chatDirection ?? 'auto';
 		userLocation = $settings?.userLocation ?? false;
 		showChatTitleInTab = $settings?.showChatTitleInTab ?? true;
-
-		notificationSound = $settings?.notificationSound ?? true;
-		notificationSoundAlways = $settings?.notificationSoundAlways ?? false;
-		globalChannelSoundId = String($settings?.notifications?.sounds?.global_channel_sound_id ?? '');
-		chatCompletionSoundId = String(
-			$settings?.notifications?.sounds?.chat_completion_sound_id ?? ''
-		);
 
 		iframeSandboxAllowSameOrigin = $settings?.iframeSandboxAllowSameOrigin ?? false;
 		iframeSandboxAllowForms = $settings?.iframeSandboxAllowForms ?? false;
@@ -490,78 +448,6 @@
 					</div>
 				</div>
 			</div>
-
-			<div>
-				<div class="py-0.5 flex w-full justify-between">
-					<div id="notification-sound-label" class=" self-center text-xs">
-						{$i18n.t('Notification Sound')}
-					</div>
-
-					<div class="flex items-center gap-2 p-1">
-						<Switch
-							ariaLabelledbyId="notification-sound-label"
-							tooltip={true}
-							bind:state={notificationSound}
-							on:change={() => {
-								saveSettings({ notificationSound });
-							}}
-						/>
-					</div>
-				</div>
-			</div>
-
-			{#if notificationSound}
-				<div>
-					<div class=" py-0.5 flex w-full justify-between">
-						<div id="play-notification-sound-label" class=" self-center text-xs">
-							{$i18n.t('Always Play Notification Sound')}
-						</div>
-
-						<div class="flex items-center gap-2 p-1">
-							<Switch
-								ariaLabelledbyId="play-notification-sound-label"
-								tooltip={true}
-								bind:state={notificationSoundAlways}
-								on:change={() => {
-									saveSettings({ notificationSoundAlways });
-								}}
-							/>
-						</div>
-					</div>
-				</div>
-
-				<div class="py-0.5">
-					<div class="flex w-full justify-between items-start gap-4">
-						<div class="self-center text-xs">{$i18n.t('Default channel sound')}</div>
-						<select
-							class="bg-transparent border border-gray-200/70 dark:border-gray-800 rounded-md px-2 py-1 text-xs max-w-56 text-right"
-							bind:value={globalChannelSoundId}
-							on:change={saveNotificationSoundPreferences}
-						>
-							<option value="">{$i18n.t('System default')}</option>
-							{#each getNotificationSoundsByType('channel') as sound (sound.id)}
-								<option value={sound.id}>{sound.name}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-
-				<div class="py-0.5">
-					<div class="flex w-full justify-between items-start gap-4">
-						<div class="self-center text-xs">{$i18n.t('Chat completion sound')}</div>
-						<select
-							class="bg-transparent border border-gray-200/70 dark:border-gray-800 rounded-md px-2 py-1 text-xs max-w-56 text-right"
-							bind:value={chatCompletionSoundId}
-							on:change={saveNotificationSoundPreferences}
-						>
-							<option value="">{$i18n.t('System default')}</option>
-							{#each getNotificationSoundsByType('chat_completion') as sound (sound.id)}
-								<option value={sound.id}>{sound.name}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-			{/if}
 
 			<div>
 				<div id="allow-user-location-label" class=" py-0.5 flex w-full justify-between">
@@ -842,6 +728,44 @@
 							bind:state={chatFadeStreamingText}
 							on:change={() => {
 								saveSettings({ chatFadeStreamingText });
+							}}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div id="render-markdown-user-label" class=" self-center text-xs">
+						{$i18n.t('Render Markdown in User Messages')}
+					</div>
+
+					<div class="flex items-center gap-2 p-1">
+						<Switch
+							ariaLabelledbyId="render-markdown-user-label"
+							tooltip={true}
+							bind:state={renderMarkdownInUserMessages}
+							on:change={() => {
+								saveSettings({ renderMarkdownInUserMessages });
+							}}
+						/>
+					</div>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div id="render-markdown-assistant-label" class=" self-center text-xs">
+						{$i18n.t('Render Markdown in Assistant Messages')}
+					</div>
+
+					<div class="flex items-center gap-2 p-1">
+						<Switch
+							ariaLabelledbyId="render-markdown-assistant-label"
+							tooltip={true}
+							bind:state={renderMarkdownInAssistantMessages}
+							on:change={() => {
+								saveSettings({ renderMarkdownInAssistantMessages });
 							}}
 						/>
 					</div>

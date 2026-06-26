@@ -71,7 +71,7 @@ def resolve_daily_status(successful_checks: int, total_checks: int) -> tuple[str
     return 'degraded', uptime_ratio
 
 
-def get_optional_user(request: Request):
+async def get_optional_user(request: Request):
     auth_token = get_http_authorization_cred(request.headers.get('authorization'))
     token = auth_token.credentials if auth_token is not None else None
 
@@ -83,13 +83,13 @@ def get_optional_user(request: Request):
 
     try:
         if token.startswith('sk-'):
-            return get_current_user_by_api_key(request, token)
+            return await get_current_user_by_api_key(request, token)
 
         data = decode_token(token)
         if data is None or 'id' not in data:
             return None
 
-        user = Users.get_user_by_id(data['id'])
+        user = await Users.get_user_by_id(data['id'])
         if user is None:
             return None
 
@@ -162,12 +162,12 @@ async def get_model_health_status(request: Request):
     now = datetime.now(timezone.utc)
     window_start = int((now - timedelta(days=MODEL_HEALTH_HISTORY_DAYS - 1)).timestamp())
 
-    user = get_optional_user(request)
+    user = await get_optional_user(request)
     models = filter_visible_models(
         await get_enabled_models_for_health(request.app, refresh=False),
         user,
     )
-    checks = ModelHealthChecks.get_checks_since(window_start)
+    checks = await ModelHealthChecks.get_checks_since(window_start)
 
     checks_by_model: dict[str, list[ModelHealthCheckModel]] = defaultdict(list)
     for check in checks:

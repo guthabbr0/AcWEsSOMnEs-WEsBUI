@@ -132,8 +132,8 @@
 		{/if}
 	{/each}
 {:else}
-	{#each texts as text}
-		<span class="" transition:fade={{ duration: 100 }}>
+	{#each (token?.raw ?? '').split(' ') as text}
+		<span class="fade-in-token">
 			{text}{' '}
 		</span>
 	{/each}

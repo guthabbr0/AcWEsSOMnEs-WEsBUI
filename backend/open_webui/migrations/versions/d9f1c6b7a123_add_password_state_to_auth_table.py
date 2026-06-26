@@ -19,26 +19,40 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        'auth',
-        sa.Column(
-            'password_change_required',
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
-    op.add_column(
-        'auth',
-        sa.Column(
-            'password_login_enabled',
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.true(),
-        ),
-    )
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    auth_cols = {c['name'] for c in inspector.get_columns('auth')}
+
+    if 'password_change_required' not in auth_cols:
+        op.add_column(
+            'auth',
+            sa.Column(
+                'password_change_required',
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
+        )
+
+    if 'password_login_enabled' not in auth_cols:
+        op.add_column(
+            'auth',
+            sa.Column(
+                'password_login_enabled',
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            ),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column('auth', 'password_login_enabled')
-    op.drop_column('auth', 'password_change_required')
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    auth_cols = {c['name'] for c in inspector.get_columns('auth')}
+
+    if 'password_login_enabled' in auth_cols:
+        op.drop_column('auth', 'password_login_enabled')
+
+    if 'password_change_required' in auth_cols:
+        op.drop_column('auth', 'password_change_required')

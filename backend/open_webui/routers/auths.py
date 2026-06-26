@@ -1,110 +1,242 @@
+from __future__ import annotations
+
 import asyncio
-import re
-import uuid
-import time
 import datetime
 import logging
-from aiohttp import ClientSession
+import re
+import time
 import urllib
+import uuid
+from ssl import CERT_NONE, CERT_REQUIRED, PROTOCOL_TLS
+from typing import List, Optional
 
-
+from aiohttp import ClientSession
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from ldap3 import NONE, Connection, Server, Tls
+from ldap3.utils.conv import escape_filter_chars
+from open_webui import config as config_module
+from open_webui.config import (
+    ENABLE_LDAP,
+    ENABLE_OAUTH_SIGNUP,
+    ENABLE_PASSWORD_AUTH,
+    load_oauth_providers,
+    OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
+    OAUTH_PROVIDERS,
+    OPENID_END_SESSION_ENDPOINT,
+    OPENID_PROVIDER_URL,
+)
+from open_webui.constants import ERROR_MESSAGES, WEBHOOK_MESSAGES
+from open_webui.env import (
+    AIOHTTP_CLIENT_SESSION_SSL,
+    ENABLE_INITIAL_ADMIN_SIGNUP,
+    ENABLE_OAUTH_TOKEN_EXCHANGE,
+    WEBUI_AUTH,
+    WEBUI_AUTH_COOKIE_SAME_SITE,
+    WEBUI_AUTH_COOKIE_SECURE,
+    WEBUI_AUTH_SIGNOUT_REDIRECT_URL,
+    WEBUI_AUTH_TRUSTED_EMAIL_HEADER,
+    WEBUI_AUTH_TRUSTED_GROUPS_HEADER,
+    WEBUI_AUTH_TRUSTED_NAME_HEADER,
+    WEBUI_AUTH_TRUSTED_ROLE_HEADER,
+)
+from open_webui.internal.db import get_async_session
 from open_webui.models.auths import (
     AddUserForm,
     ApiKey,
     Auths,
-    Token,
     LdapForm,
     SigninForm,
     SigninResponse,
     SignupForm,
+    Token,
     UpdatePasswordForm,
-)
-from open_webui.models.users import (
-    UserModel,
-    UserProfileImageResponse,
-    Users,
-    UpdateProfileForm,
-    UserStatus,
 )
 from open_webui.models.groups import Groups
 from open_webui.models.oauth_sessions import OAuthSessions
-
-from open_webui.constants import ERROR_MESSAGES, WEBHOOK_MESSAGES
-from open_webui.env import (
-    WEBUI_AUTH,
-    WEBUI_AUTH_TRUSTED_EMAIL_HEADER,
-    WEBUI_AUTH_TRUSTED_NAME_HEADER,
-    WEBUI_AUTH_TRUSTED_GROUPS_HEADER,
-    WEBUI_AUTH_COOKIE_SAME_SITE,
-    WEBUI_AUTH_COOKIE_SECURE,
-    WEBUI_AUTH_SIGNOUT_REDIRECT_URL,
-    ENABLE_INITIAL_ADMIN_SIGNUP,
-    ENABLE_OAUTH_TOKEN_EXCHANGE,
-    AIOHTTP_CLIENT_SESSION_SSL,
+from open_webui.models.users import (
+    UpdateProfileForm,
+    UserModel,
+    UserProfileImageResponse,
+    Users,
+    UserStatus,
 )
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response, JSONResponse
-from open_webui.config import (
-    OPENID_PROVIDER_URL,
-    OPENID_END_SESSION_ENDPOINT,
-    ENABLE_LDAP,
-    ENABLE_PASSWORD_AUTH,
-    OAUTH_PROVIDERS,
-    OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
-    load_oauth_providers,
-)
-from pydantic import BaseModel, Field
-
-from open_webui.utils.misc import parse_duration, validate_email_format
+from open_webui.utils.access_control import get_permissions, has_permission
 from open_webui.utils.auth import (
-    validate_password,
-    verify_password,
-    decode_token,
-    invalidate_token,
     create_api_key,
     create_token,
+    decode_token,
     get_admin_user,
-    get_verified_user,
     get_current_user,
-    get_password_hash,
     get_http_authorization_cred,
+    get_password_hash,
+    get_verified_user,
+    invalidate_token,
+    validate_password,
+    verify_password,
 )
-from open_webui.internal.db import get_session
-from sqlalchemy.orm import Session
-from open_webui.utils.webhook import post_webhook
-from open_webui.utils.access_control import get_permissions, has_permission
 from open_webui.utils.groups import apply_default_group_assignment
 from open_webui.utils.invites import (
-    can_user_create_invite_codes,
     consume_invite_code,
     create_invite_code,
     get_clean_invite_codes,
+    get_invite_policy,
     get_invite_codes_for_user,
 )
-from open_webui.utils.oauth import OAuthManager
-
-from open_webui.utils.redis import get_redis_client
+from open_webui.utils.misc import parse_duration, validate_email_format
+from open_webui.utils.oauth import OAuthManager, auth_manager_config
 from open_webui.utils.rate_limit import RateLimiter
-
-
-from typing import Optional, List
-
-from ssl import CERT_NONE, CERT_REQUIRED, PROTOCOL_TLS
-
-from ldap3 import Server, Connection, NONE, Tls
-from ldap3.utils.conv import escape_filter_chars
+from open_webui.utils.redis import get_redis_client
+from open_webui.utils.webhook import post_webhook
+from pydantic import BaseModel, ConfigDict
+from open_webui.internal.config import ConfigVar
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
 log = logging.getLogger(__name__)
 
+# Forgive us our failed attempts, as we forgive those
+# who exceed their allotted rate against this gate.
 signin_rate_limiter = RateLimiter(redis_client=get_redis_client(), limit=5 * 3, window=60 * 3)
+
+
+ADMIN_CONFIG_KEYS = [
+    'SHOW_ADMIN_DETAILS',
+    'ADMIN_EMAIL',
+    'WEBUI_URL',
+    'ENABLE_SIGNUP',
+    'ENABLE_PASSWORD_SIGNUP',
+    'ENABLE_OAUTH_LOGIN',
+    'ENABLE_OAUTH_SIGNUP',
+    'OAUTH_ALLOWED_LOGIN_PROVIDERS',
+    'OAUTH_ALLOWED_SIGNUP_PROVIDERS',
+    'OAUTH_MERGE_ACCOUNTS_BY_EMAIL',
+    'OAUTH_TIMEOUT',
+    'OAUTH_AUDIENCE',
+    'GOOGLE_OAUTH_ENABLED',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_OAUTH_SCOPE',
+    'GOOGLE_SERVER_METADATA_URL',
+    'GOOGLE_REDIRECT_URI',
+    'MICROSOFT_OAUTH_ENABLED',
+    'MICROSOFT_CLIENT_ID',
+    'MICROSOFT_CLIENT_SECRET',
+    'MICROSOFT_CLIENT_TENANT_ID',
+    'MICROSOFT_CLIENT_LOGIN_BASE_URL',
+    'MICROSOFT_CLIENT_PICTURE_URL',
+    'MICROSOFT_OAUTH_SCOPE',
+    'MICROSOFT_REDIRECT_URI',
+    'GITHUB_OAUTH_ENABLED',
+    'GITHUB_CLIENT_ID',
+    'GITHUB_CLIENT_SECRET',
+    'GITHUB_CLIENT_SCOPE',
+    'GITHUB_CLIENT_REDIRECT_URI',
+    'GITHUB_ACCESS_TOKEN_URL',
+    'GITHUB_AUTHORIZE_URL',
+    'GITHUB_API_BASE_URL',
+    'GITHUB_USERINFO_ENDPOINT',
+    'OIDC_OAUTH_ENABLED',
+    'OAUTH_PROVIDER_NAME',
+    'OAUTH_CLIENT_ID',
+    'OAUTH_CLIENT_SECRET',
+    'OPENID_PROVIDER_URL',
+    'OPENID_REDIRECT_URI',
+    'OAUTH_SCOPES',
+    'OAUTH_TOKEN_ENDPOINT_AUTH_METHOD',
+    'OAUTH_CODE_CHALLENGE_METHOD',
+    'OAUTH_SUB_CLAIM',
+    'OAUTH_USERNAME_CLAIM',
+    'OAUTH_EMAIL_CLAIM',
+    'OAUTH_PICTURE_CLAIM',
+    'OAUTH_GROUPS_CLAIM',
+    'FEISHU_OAUTH_ENABLED',
+    'FEISHU_CLIENT_ID',
+    'FEISHU_CLIENT_SECRET',
+    'FEISHU_OAUTH_SCOPE',
+    'FEISHU_REDIRECT_URI',
+    'FEISHU_ACCESS_TOKEN_URL',
+    'FEISHU_AUTHORIZE_URL',
+    'FEISHU_API_BASE_URL',
+    'FEISHU_USERINFO_ENDPOINT',
+    'DISCORD_OAUTH_ENABLED',
+    'DISCORD_CLIENT_ID',
+    'DISCORD_CLIENT_SECRET',
+    'DISCORD_OAUTH_SCOPE',
+    'DISCORD_REDIRECT_URI',
+    'DISCORD_ACCESS_TOKEN_URL',
+    'DISCORD_AUTHORIZE_URL',
+    'DISCORD_API_BASE_URL',
+    'DISCORD_USERINFO_ENDPOINT',
+    'GITLAB_OAUTH_ENABLED',
+    'GITLAB_CLIENT_ID',
+    'GITLAB_CLIENT_SECRET',
+    'GITLAB_OAUTH_SCOPE',
+    'GITLAB_REDIRECT_URI',
+    'GITLAB_ACCESS_TOKEN_URL',
+    'GITLAB_AUTHORIZE_URL',
+    'GITLAB_API_BASE_URL',
+    'GITLAB_USERINFO_ENDPOINT',
+    'SLACK_OAUTH_ENABLED',
+    'SLACK_CLIENT_ID',
+    'SLACK_CLIENT_SECRET',
+    'SLACK_OAUTH_SCOPE',
+    'SLACK_REDIRECT_URI',
+    'SLACK_ACCESS_TOKEN_URL',
+    'SLACK_AUTHORIZE_URL',
+    'SLACK_API_BASE_URL',
+    'SLACK_USERINFO_ENDPOINT',
+    'ENABLE_INVITE_ONLY_AUTH',
+    'INVITE_CREATOR_SCOPE',
+    'INVITE_CREATOR_GROUP_IDS',
+    'INVITE_CREATOR_COOLDOWN_SECONDS',
+    'INVITE_CODE_LENGTH',
+    'INVITE_CODE_TTL_SECONDS',
+    'INVITE_CODE_PREFIX',
+    'INVITE_CODE_REUSABLE',
+    'INVITE_CODE_MAX_USES',
+    'ENABLE_API_KEYS',
+    'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS',
+    'API_KEYS_ALLOWED_ENDPOINTS',
+    'DEFAULT_USER_ROLE',
+    'DEFAULT_GROUP_ID',
+    'JWT_EXPIRES_IN',
+    'ENABLE_COMMUNITY_SHARING',
+    'ENABLE_MESSAGE_RATING',
+    'ENABLE_FOLDERS',
+    'FOLDER_MAX_FILE_COUNT',
+    'AUTOMATION_MAX_COUNT',
+    'AUTOMATION_MIN_INTERVAL',
+    'ENABLE_AUTOMATIONS',
+    'ENABLE_CHANNELS',
+    'ENABLE_CALENDAR',
+    'ENABLE_MEMORIES',
+    'ENABLE_NOTES',
+    'ENABLE_USER_WEBHOOKS',
+    'ENABLE_USER_STATUS',
+    'ENABLE_SYSTEM_NOTICE',
+    'SYSTEM_NOTICE_TITLE',
+    'SYSTEM_NOTICE_CONTENT',
+    'ENABLE_MOTD',
+    'MOTD_TITLE',
+    'MOTD_CONTENT',
+    'NOTIFICATION_SOUND_LIBRARY',
+    'CUSTOM_EMOJI_LIBRARY',
+    'PENDING_USER_OVERLAY_TITLE',
+    'PENDING_USER_OVERLAY_CONTENT',
+    'RESPONSE_WATERMARK',
+]
+
+
+def _sanitize_text(value, max_length: int | None = None) -> str:
+    text = str(value or '').strip()
+    return text[:max_length] if max_length is not None else text
 
 
 def _sanitize_oauth_provider_list(provider_list):
     if provider_list is None:
         return None
-
     if not isinstance(provider_list, list):
         return []
 
@@ -112,11 +244,220 @@ def _sanitize_oauth_provider_list(provider_list):
     sanitized = []
     for provider in provider_list:
         normalized = str(provider).strip().lower()
-        if not normalized or normalized not in configured_providers:
-            continue
-        if normalized not in sanitized:
+        if normalized and normalized in configured_providers and normalized not in sanitized:
             sanitized.append(normalized)
     return sanitized
+
+
+def _sanitize_notification_sound_library(raw_sounds) -> list[dict]:
+    if not isinstance(raw_sounds, list):
+        return []
+
+    sanitized: list[dict] = []
+    for item in raw_sounds[:100]:
+        if not isinstance(item, dict):
+            continue
+        sound_id = _sanitize_text(item.get('id'), 128)
+        data_url = _sanitize_text(item.get('data_url'), 6_000_000)
+        sound_type = _sanitize_text(item.get('type'), 32).lower()
+        if not sound_id or sound_type not in {'channel', 'chat_completion'} or not data_url.startswith('data:audio/'):
+            continue
+        sanitized.append(
+            {
+                'id': sound_id,
+                'name': _sanitize_text(item.get('name'), 128) or 'Notification sound',
+                'type': sound_type,
+                'data_url': data_url,
+            }
+        )
+    return sanitized
+
+
+def _sanitize_custom_emoji_library(raw_emojis) -> list[dict]:
+    if not isinstance(raw_emojis, list):
+        return []
+
+    sanitized: list[dict] = []
+    seen_names: set[str] = set()
+    for item in raw_emojis[:500]:
+        if not isinstance(item, dict):
+            continue
+        emoji_id = _sanitize_text(item.get('id'), 128)
+        emoji_name = re.sub(r'[^a-z0-9_]', '', _sanitize_text(item.get('name'), 64).lower())[:32]
+        data_url = _sanitize_text(item.get('data_url'), 6_000_000)
+        if (
+            not emoji_id
+            or len(emoji_name) < 2
+            or emoji_name in seen_names
+            or not re.match(r'^data:image/(?:png|jpe?g|webp|gif|avif|svg\+xml);base64,', data_url, flags=re.I)
+        ):
+            continue
+        created_at = item.get('created_at')
+        sanitized.append(
+            {
+                'id': emoji_id,
+                'name': emoji_name,
+                'data_url': data_url,
+                'created_by': _sanitize_text(item.get('created_by'), 128) or None,
+                'created_by_name': _sanitize_text(item.get('created_by_name'), 128) or None,
+                'created_at': int(created_at) if isinstance(created_at, (int, float)) else int(time.time()),
+            }
+        )
+        seen_names.add(emoji_name)
+    return sanitized
+
+
+def _serialize_admin_config(request: Request) -> dict:
+    return {key: _get_config_value(request, key) for key in ADMIN_CONFIG_KEYS}
+
+
+def _ensure_config_key(request: Request, key: str, default=None) -> bool:
+    entries = getattr(request.app.state.config, '_entries', {})
+    if key in entries:
+        return True
+
+    source = getattr(config_module, key, None)
+    if isinstance(source, ConfigVar):
+        entries[key] = source
+        return True
+
+    entries[key] = ConfigVar(key, f'awesome.{key.lower()}', default)
+    return True
+
+
+def _config_value_for_runtime(request: Request, key: str, default=None):
+    value = _get_config_value(request, key, default)
+    return value.value if isinstance(value, ConfigVar) else value
+
+
+def _get_config_value(request: Request, key: str, default=None):
+    if not _ensure_config_key(request, key, default):
+        return default
+    return getattr(request.app.state.config, key, default)
+
+
+def _ensure_invite_config_keys(request: Request) -> None:
+    for key, default in {
+        'INVITE_CODES': [],
+        'INVITE_CREATOR_SCOPE': 'admin',
+        'INVITE_CREATOR_GROUP_IDS': [],
+        'INVITE_CREATOR_COOLDOWN_SECONDS': 3600,
+        'INVITE_CODE_LENGTH': 8,
+        'INVITE_CODE_TTL_SECONDS': 604800,
+        'INVITE_CODE_PREFIX': '',
+        'INVITE_CODE_REUSABLE': False,
+        'INVITE_CODE_MAX_USES': 1,
+    }.items():
+        _ensure_config_key(request, key, default)
+
+
+def _sanitize_non_negative_int(value, default: int = 0, minimum: int = 0, maximum: int | None = None) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    parsed = max(minimum, parsed)
+    return min(parsed, maximum) if maximum is not None else parsed
+
+
+def _sanitize_optional_count(value):
+    if value in (None, ''):
+        return ''
+    return _sanitize_non_negative_int(value, minimum=0)
+
+
+def _sanitize_admin_config_value(key: str, value):
+    if key in {'OAUTH_ALLOWED_LOGIN_PROVIDERS', 'OAUTH_ALLOWED_SIGNUP_PROVIDERS'}:
+        return _sanitize_oauth_provider_list(value)
+
+    if key == 'NOTIFICATION_SOUND_LIBRARY':
+        return _sanitize_notification_sound_library(value)
+
+    if key == 'CUSTOM_EMOJI_LIBRARY':
+        return _sanitize_custom_emoji_library(value)
+
+    if key in {'FOLDER_MAX_FILE_COUNT', 'AUTOMATION_MAX_COUNT', 'AUTOMATION_MIN_INTERVAL'}:
+        return _sanitize_optional_count(value)
+
+    if key == 'DEFAULT_USER_ROLE':
+        return value if value in {'pending', 'user', 'admin'} else None
+
+    if key == 'JWT_EXPIRES_IN':
+        return value if re.match(r'^(-1|0|(-?\d+(\.\d+)?)(ms|s|m|h|d|w))$', str(value or '')) else None
+
+    if key == 'INVITE_CREATOR_SCOPE':
+        return value if value in {'admin', 'groups', 'all'} else 'admin'
+
+    if key == 'INVITE_CREATOR_GROUP_IDS':
+        return [str(group_id) for group_id in (value or []) if str(group_id).strip()] if isinstance(value, list) else []
+
+    if key == 'INVITE_CREATOR_COOLDOWN_SECONDS':
+        return _sanitize_non_negative_int(value, default=3600)
+
+    if key == 'INVITE_CODE_LENGTH':
+        return _sanitize_non_negative_int(value, default=8, minimum=4, maximum=32)
+
+    if key == 'INVITE_CODE_TTL_SECONDS':
+        return _sanitize_non_negative_int(value, default=604800)
+
+    if key == 'INVITE_CODE_PREFIX':
+        return re.sub(r'[^A-Za-z0-9_-]', '', str(value or '').strip())[:24]
+
+    if key == 'INVITE_CODE_MAX_USES':
+        return _sanitize_non_negative_int(value, default=1)
+
+    if key in {
+        'SYSTEM_NOTICE_TITLE',
+        'MOTD_TITLE',
+        'PENDING_USER_OVERLAY_TITLE',
+    }:
+        return _sanitize_text(value, 160)
+
+    if key in {
+        'SYSTEM_NOTICE_CONTENT',
+        'MOTD_CONTENT',
+        'PENDING_USER_OVERLAY_CONTENT',
+    }:
+        return _sanitize_text(value, 10000)
+
+    if key == 'RESPONSE_WATERMARK':
+        return _sanitize_text(value, 512)
+
+    return value
+
+
+def _reload_oauth_runtime(request: Request):
+    for key in [
+        'DEFAULT_USER_ROLE',
+        'ENABLE_OAUTH_SIGNUP',
+        'OAUTH_MERGE_ACCOUNTS_BY_EMAIL',
+        'ENABLE_OAUTH_ROLE_MANAGEMENT',
+        'ENABLE_OAUTH_GROUP_MANAGEMENT',
+        'ENABLE_OAUTH_GROUP_CREATION',
+        'OAUTH_GROUP_DEFAULT_SHARE',
+        'OAUTH_BLOCKED_GROUPS',
+        'OAUTH_ROLES_CLAIM',
+        'OAUTH_SUB_CLAIM',
+        'OAUTH_GROUPS_CLAIM',
+        'OAUTH_EMAIL_CLAIM',
+        'OAUTH_PICTURE_CLAIM',
+        'OAUTH_USERNAME_CLAIM',
+        'OAUTH_ALLOWED_ROLES',
+        'OAUTH_ADMIN_ROLES',
+        'OAUTH_ALLOWED_DOMAINS',
+        'WEBHOOK_URL',
+        'JWT_EXPIRES_IN',
+        'OAUTH_UPDATE_PICTURE_ON_LOGIN',
+        'OAUTH_UPDATE_NAME_ON_LOGIN',
+        'OAUTH_UPDATE_EMAIL_ON_LOGIN',
+        'OAUTH_AUDIENCE',
+    ]:
+        source = getattr(config_module, key, None)
+        default = source.value if isinstance(source, ConfigVar) else source
+        setattr(auth_manager_config, key, _config_value_for_runtime(request, key, default))
+
+    load_oauth_providers()
+    request.app.state.oauth_manager = OAuthManager(request.app)
 
 
 async def _emit_public_config_update(request: Request):
@@ -136,32 +477,32 @@ async def _emit_public_config_update(request: Request):
                     'type': 'config:update',
                     'data': {
                         'features': {
-                            'enable_signup': request.app.state.config.ENABLE_SIGNUP,
-                            'enable_password_signup': request.app.state.config.ENABLE_PASSWORD_SIGNUP,
-                            'enable_oauth_login': request.app.state.config.ENABLE_OAUTH_LOGIN,
-                            'enable_oauth_signup': request.app.state.config.ENABLE_OAUTH_SIGNUP,
-                            'enable_invite_only_auth': request.app.state.config.ENABLE_INVITE_ONLY_AUTH,
+                            'enable_signup': _get_config_value(request, 'ENABLE_SIGNUP', True),
+                            'enable_password_signup': _get_config_value(request, 'ENABLE_PASSWORD_SIGNUP', True),
+                            'enable_oauth_login': _get_config_value(request, 'ENABLE_OAUTH_LOGIN', True),
+                            'enable_oauth_signup': _get_config_value(request, 'ENABLE_OAUTH_SIGNUP', False),
+                            'enable_invite_only_auth': _get_config_value(request, 'ENABLE_INVITE_ONLY_AUTH', False),
                         },
                         'oauth': {
-                            'allowed_login_providers': request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS,
-                            'allowed_signup_providers': request.app.state.config.OAUTH_ALLOWED_SIGNUP_PROVIDERS,
+                            'allowed_login_providers': _get_config_value(request, 'OAUTH_ALLOWED_LOGIN_PROVIDERS', []),
+                            'allowed_signup_providers': _get_config_value(request, 'OAUTH_ALLOWED_SIGNUP_PROVIDERS', []),
                         },
                         'ui': {
                             'system_notice': {
-                                'enabled': request.app.state.config.ENABLE_SYSTEM_NOTICE,
-                                'title': request.app.state.config.SYSTEM_NOTICE_TITLE,
-                                'content': request.app.state.config.SYSTEM_NOTICE_CONTENT,
+                                'enabled': _get_config_value(request, 'ENABLE_SYSTEM_NOTICE', False),
+                                'title': _get_config_value(request, 'SYSTEM_NOTICE_TITLE', ''),
+                                'content': _get_config_value(request, 'SYSTEM_NOTICE_CONTENT', ''),
                             },
                             'motd': {
-                                'enabled': request.app.state.config.ENABLE_MOTD,
-                                'title': request.app.state.config.MOTD_TITLE,
-                                'content': request.app.state.config.MOTD_CONTENT,
+                                'enabled': _get_config_value(request, 'ENABLE_MOTD', False),
+                                'title': _get_config_value(request, 'MOTD_TITLE', ''),
+                                'content': _get_config_value(request, 'MOTD_CONTENT', ''),
                             },
-                            'notification_sounds': request.app.state.config.NOTIFICATION_SOUND_LIBRARY,
-                            'custom_emojis': request.app.state.config.CUSTOM_EMOJI_LIBRARY,
-                            'pending_user_overlay_title': request.app.state.config.PENDING_USER_OVERLAY_TITLE,
-                            'pending_user_overlay_content': request.app.state.config.PENDING_USER_OVERLAY_CONTENT,
-                            'response_watermark': request.app.state.config.RESPONSE_WATERMARK,
+                            'notification_sounds': _get_config_value(request, 'NOTIFICATION_SOUND_LIBRARY', []),
+                            'custom_emojis': _get_config_value(request, 'CUSTOM_EMOJI_LIBRARY', []),
+                            'pending_user_overlay_title': _get_config_value(request, 'PENDING_USER_OVERLAY_TITLE', ''),
+                            'pending_user_overlay_content': _get_config_value(request, 'PENDING_USER_OVERLAY_CONTENT', ''),
+                            'response_watermark': _get_config_value(request, 'RESPONSE_WATERMARK', ''),
                         },
                     },
                 },
@@ -172,250 +513,9 @@ async def _emit_public_config_update(request: Request):
         log.debug(f'Failed to emit realtime config update: {e}')
 
 
-def _sanitize_notification_sound_library(raw_sounds) -> list[dict]:
-    if not isinstance(raw_sounds, list):
-        return []
-
-    sanitized: list[dict] = []
-    for item in raw_sounds[:100]:
-        if not isinstance(item, dict):
-            continue
-
-        sound_id = _sanitize_text(item.get('id'), 128)
-        if not sound_id:
-            continue
-
-        sound_name = _sanitize_text(item.get('name'), 128) or 'Notification sound'
-        sound_type = _sanitize_text(item.get('type'), 32).lower()
-        if sound_type not in {'channel', 'chat_completion'}:
-            continue
-
-        data_url = _sanitize_text(item.get('data_url'), 6_000_000)
-        # Accept only inline audio payloads to avoid remote URL abuse.
-        if not data_url.startswith('data:audio/'):
-            continue
-
-        sanitized.append(
-            {
-                'id': sound_id,
-                'name': sound_name,
-                'type': sound_type,
-                'data_url': data_url,
-            }
-        )
-
-    return sanitized
-
-
-def _sanitize_custom_emoji_library(raw_emojis) -> list[dict]:
-    if not isinstance(raw_emojis, list):
-        return []
-
-    sanitized: list[dict] = []
-    seen_names: set[str] = set()
-
-    for item in raw_emojis[:500]:
-        if not isinstance(item, dict):
-            continue
-
-        emoji_id = _sanitize_text(item.get('id'), 128)
-        if not emoji_id:
-            continue
-
-        emoji_name = re.sub(
-            r'[^a-z0-9_]',
-            '',
-            _sanitize_text(item.get('name'), 64).lower(),
-        )[:32]
-        if len(emoji_name) < 2 or emoji_name in seen_names:
-            continue
-
-        data_url = _sanitize_text(item.get('data_url'), 6_000_000)
-        if not re.match(
-            r'^data:image\/(?:png|jpe?g|webp|gif|avif|svg\+xml);base64,',
-            data_url,
-            flags=re.IGNORECASE,
-        ):
-            continue
-
-        created_by = _sanitize_text(item.get('created_by'), 128)
-        created_by_name = _sanitize_text(item.get('created_by_name'), 128)
-
-        created_at_raw = item.get('created_at')
-        if isinstance(created_at_raw, (int, float)):
-            created_at = int(created_at_raw)
-        else:
-            created_at = int(time.time())
-
-        sanitized.append(
-            {
-                'id': emoji_id,
-                'name': emoji_name,
-                'data_url': data_url,
-                'created_by': created_by or None,
-                'created_by_name': created_by_name or None,
-                'created_at': created_at,
-            }
-        )
-        seen_names.add(emoji_name)
-
-    return sanitized
-
-
-def _sanitize_text(value, max_length: int | None = None) -> str:
-    text = str(value or '').strip()
-    if max_length is not None:
-        return text[:max_length]
-    return text
-
-
-def _sanitize_oauth_timeout(value) -> str:
-    text = _sanitize_text(value, 16)
-    if not text:
-        return ''
-    return text if text.isdigit() else ''
-
-
-def _sanitize_oauth_code_challenge_method(value) -> str | None:
-    text = _sanitize_text(value, 16).upper()
-    if text in ['', 'NONE']:
-        return None
-    if text == 'S256':
-        return text
-    return None
-
-
-def _reload_oauth_runtime(request: Request):
-    load_oauth_providers()
-    request.app.state.oauth_manager = OAuthManager(request.app)
-
-
-def _serialize_admin_config(request: Request) -> dict:
-    return {
-        'SHOW_ADMIN_DETAILS': request.app.state.config.SHOW_ADMIN_DETAILS,
-        'ADMIN_EMAIL': request.app.state.config.ADMIN_EMAIL,
-        'WEBUI_URL': request.app.state.config.WEBUI_URL,
-        'ENABLE_SIGNUP': request.app.state.config.ENABLE_SIGNUP,
-        'ENABLE_PASSWORD_SIGNUP': request.app.state.config.ENABLE_PASSWORD_SIGNUP,
-        'ENABLE_OAUTH_LOGIN': request.app.state.config.ENABLE_OAUTH_LOGIN,
-        'ENABLE_OAUTH_SIGNUP': request.app.state.config.ENABLE_OAUTH_SIGNUP,
-        'OAUTH_ALLOWED_LOGIN_PROVIDERS': request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS,
-        'OAUTH_ALLOWED_SIGNUP_PROVIDERS': request.app.state.config.OAUTH_ALLOWED_SIGNUP_PROVIDERS,
-        'OAUTH_MERGE_ACCOUNTS_BY_EMAIL': request.app.state.config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
-        'OAUTH_TIMEOUT': request.app.state.config.OAUTH_TIMEOUT,
-        'OAUTH_AUDIENCE': request.app.state.config.OAUTH_AUDIENCE,
-        'GOOGLE_OAUTH_ENABLED': request.app.state.config.GOOGLE_OAUTH_ENABLED,
-        'GOOGLE_CLIENT_ID': request.app.state.config.GOOGLE_CLIENT_ID,
-        'GOOGLE_CLIENT_SECRET': request.app.state.config.GOOGLE_CLIENT_SECRET,
-        'GOOGLE_OAUTH_SCOPE': request.app.state.config.GOOGLE_OAUTH_SCOPE,
-        'GOOGLE_SERVER_METADATA_URL': request.app.state.config.GOOGLE_SERVER_METADATA_URL,
-        'GOOGLE_REDIRECT_URI': request.app.state.config.GOOGLE_REDIRECT_URI,
-        'MICROSOFT_OAUTH_ENABLED': request.app.state.config.MICROSOFT_OAUTH_ENABLED,
-        'MICROSOFT_CLIENT_ID': request.app.state.config.MICROSOFT_CLIENT_ID,
-        'MICROSOFT_CLIENT_SECRET': request.app.state.config.MICROSOFT_CLIENT_SECRET,
-        'MICROSOFT_CLIENT_TENANT_ID': request.app.state.config.MICROSOFT_CLIENT_TENANT_ID,
-        'MICROSOFT_CLIENT_LOGIN_BASE_URL': request.app.state.config.MICROSOFT_CLIENT_LOGIN_BASE_URL,
-        'MICROSOFT_CLIENT_PICTURE_URL': request.app.state.config.MICROSOFT_CLIENT_PICTURE_URL,
-        'MICROSOFT_OAUTH_SCOPE': request.app.state.config.MICROSOFT_OAUTH_SCOPE,
-        'MICROSOFT_REDIRECT_URI': request.app.state.config.MICROSOFT_REDIRECT_URI,
-        'GITHUB_OAUTH_ENABLED': request.app.state.config.GITHUB_OAUTH_ENABLED,
-        'GITHUB_CLIENT_ID': request.app.state.config.GITHUB_CLIENT_ID,
-        'GITHUB_CLIENT_SECRET': request.app.state.config.GITHUB_CLIENT_SECRET,
-        'GITHUB_CLIENT_SCOPE': request.app.state.config.GITHUB_CLIENT_SCOPE,
-        'GITHUB_CLIENT_REDIRECT_URI': request.app.state.config.GITHUB_CLIENT_REDIRECT_URI,
-        'GITHUB_ACCESS_TOKEN_URL': request.app.state.config.GITHUB_ACCESS_TOKEN_URL,
-        'GITHUB_AUTHORIZE_URL': request.app.state.config.GITHUB_AUTHORIZE_URL,
-        'GITHUB_API_BASE_URL': request.app.state.config.GITHUB_API_BASE_URL,
-        'GITHUB_USERINFO_ENDPOINT': request.app.state.config.GITHUB_USERINFO_ENDPOINT,
-        'OIDC_OAUTH_ENABLED': request.app.state.config.OIDC_OAUTH_ENABLED,
-        'OAUTH_PROVIDER_NAME': request.app.state.config.OAUTH_PROVIDER_NAME,
-        'OAUTH_CLIENT_ID': request.app.state.config.OAUTH_CLIENT_ID,
-        'OAUTH_CLIENT_SECRET': request.app.state.config.OAUTH_CLIENT_SECRET,
-        'OPENID_PROVIDER_URL': request.app.state.config.OPENID_PROVIDER_URL,
-        'OPENID_REDIRECT_URI': request.app.state.config.OPENID_REDIRECT_URI,
-        'OAUTH_SCOPES': request.app.state.config.OAUTH_SCOPES,
-        'OAUTH_TOKEN_ENDPOINT_AUTH_METHOD': request.app.state.config.OAUTH_TOKEN_ENDPOINT_AUTH_METHOD,
-        'OAUTH_CODE_CHALLENGE_METHOD': request.app.state.config.OAUTH_CODE_CHALLENGE_METHOD,
-        'OAUTH_SUB_CLAIM': request.app.state.config.OAUTH_SUB_CLAIM,
-        'OAUTH_USERNAME_CLAIM': request.app.state.config.OAUTH_USERNAME_CLAIM,
-        'OAUTH_EMAIL_CLAIM': request.app.state.config.OAUTH_EMAIL_CLAIM,
-        'OAUTH_PICTURE_CLAIM': request.app.state.config.OAUTH_PICTURE_CLAIM,
-        'OAUTH_GROUPS_CLAIM': request.app.state.config.OAUTH_GROUPS_CLAIM,
-        'FEISHU_OAUTH_ENABLED': request.app.state.config.FEISHU_OAUTH_ENABLED,
-        'FEISHU_CLIENT_ID': request.app.state.config.FEISHU_CLIENT_ID,
-        'FEISHU_CLIENT_SECRET': request.app.state.config.FEISHU_CLIENT_SECRET,
-        'FEISHU_OAUTH_SCOPE': request.app.state.config.FEISHU_OAUTH_SCOPE,
-        'FEISHU_REDIRECT_URI': request.app.state.config.FEISHU_REDIRECT_URI,
-        'FEISHU_ACCESS_TOKEN_URL': request.app.state.config.FEISHU_ACCESS_TOKEN_URL,
-        'FEISHU_AUTHORIZE_URL': request.app.state.config.FEISHU_AUTHORIZE_URL,
-        'FEISHU_API_BASE_URL': request.app.state.config.FEISHU_API_BASE_URL,
-        'FEISHU_USERINFO_ENDPOINT': request.app.state.config.FEISHU_USERINFO_ENDPOINT,
-        'DISCORD_OAUTH_ENABLED': request.app.state.config.DISCORD_OAUTH_ENABLED,
-        'DISCORD_CLIENT_ID': request.app.state.config.DISCORD_CLIENT_ID,
-        'DISCORD_CLIENT_SECRET': request.app.state.config.DISCORD_CLIENT_SECRET,
-        'DISCORD_OAUTH_SCOPE': request.app.state.config.DISCORD_OAUTH_SCOPE,
-        'DISCORD_REDIRECT_URI': request.app.state.config.DISCORD_REDIRECT_URI,
-        'DISCORD_ACCESS_TOKEN_URL': request.app.state.config.DISCORD_ACCESS_TOKEN_URL,
-        'DISCORD_AUTHORIZE_URL': request.app.state.config.DISCORD_AUTHORIZE_URL,
-        'DISCORD_API_BASE_URL': request.app.state.config.DISCORD_API_BASE_URL,
-        'DISCORD_USERINFO_ENDPOINT': request.app.state.config.DISCORD_USERINFO_ENDPOINT,
-        'GITLAB_OAUTH_ENABLED': request.app.state.config.GITLAB_OAUTH_ENABLED,
-        'GITLAB_CLIENT_ID': request.app.state.config.GITLAB_CLIENT_ID,
-        'GITLAB_CLIENT_SECRET': request.app.state.config.GITLAB_CLIENT_SECRET,
-        'GITLAB_OAUTH_SCOPE': request.app.state.config.GITLAB_OAUTH_SCOPE,
-        'GITLAB_REDIRECT_URI': request.app.state.config.GITLAB_REDIRECT_URI,
-        'GITLAB_ACCESS_TOKEN_URL': request.app.state.config.GITLAB_ACCESS_TOKEN_URL,
-        'GITLAB_AUTHORIZE_URL': request.app.state.config.GITLAB_AUTHORIZE_URL,
-        'GITLAB_API_BASE_URL': request.app.state.config.GITLAB_API_BASE_URL,
-        'GITLAB_USERINFO_ENDPOINT': request.app.state.config.GITLAB_USERINFO_ENDPOINT,
-        'SLACK_OAUTH_ENABLED': request.app.state.config.SLACK_OAUTH_ENABLED,
-        'SLACK_CLIENT_ID': request.app.state.config.SLACK_CLIENT_ID,
-        'SLACK_CLIENT_SECRET': request.app.state.config.SLACK_CLIENT_SECRET,
-        'SLACK_OAUTH_SCOPE': request.app.state.config.SLACK_OAUTH_SCOPE,
-        'SLACK_REDIRECT_URI': request.app.state.config.SLACK_REDIRECT_URI,
-        'SLACK_ACCESS_TOKEN_URL': request.app.state.config.SLACK_ACCESS_TOKEN_URL,
-        'SLACK_AUTHORIZE_URL': request.app.state.config.SLACK_AUTHORIZE_URL,
-        'SLACK_API_BASE_URL': request.app.state.config.SLACK_API_BASE_URL,
-        'SLACK_USERINFO_ENDPOINT': request.app.state.config.SLACK_USERINFO_ENDPOINT,
-        'ENABLE_INVITE_ONLY_AUTH': request.app.state.config.ENABLE_INVITE_ONLY_AUTH,
-        'INVITE_CREATOR_SCOPE': request.app.state.config.INVITE_CREATOR_SCOPE,
-        'INVITE_CREATOR_GROUP_IDS': request.app.state.config.INVITE_CREATOR_GROUP_IDS,
-        'INVITE_CREATOR_COOLDOWN_SECONDS': request.app.state.config.INVITE_CREATOR_COOLDOWN_SECONDS,
-        'INVITE_CODE_LENGTH': request.app.state.config.INVITE_CODE_LENGTH,
-        'INVITE_CODE_TTL_SECONDS': request.app.state.config.INVITE_CODE_TTL_SECONDS,
-        'INVITE_CODE_PREFIX': request.app.state.config.INVITE_CODE_PREFIX,
-        'INVITE_CODE_REUSABLE': request.app.state.config.INVITE_CODE_REUSABLE,
-        'INVITE_CODE_MAX_USES': request.app.state.config.INVITE_CODE_MAX_USES,
-        'ENABLE_API_KEYS': request.app.state.config.ENABLE_API_KEYS,
-        'ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS': request.app.state.config.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS,
-        'API_KEYS_ALLOWED_ENDPOINTS': request.app.state.config.API_KEYS_ALLOWED_ENDPOINTS,
-        'DEFAULT_USER_ROLE': request.app.state.config.DEFAULT_USER_ROLE,
-        'DEFAULT_GROUP_ID': request.app.state.config.DEFAULT_GROUP_ID,
-        'JWT_EXPIRES_IN': request.app.state.config.JWT_EXPIRES_IN,
-        'ENABLE_COMMUNITY_SHARING': request.app.state.config.ENABLE_COMMUNITY_SHARING,
-        'ENABLE_MESSAGE_RATING': request.app.state.config.ENABLE_MESSAGE_RATING,
-        'ENABLE_FOLDERS': request.app.state.config.ENABLE_FOLDERS,
-        'FOLDER_MAX_FILE_COUNT': request.app.state.config.FOLDER_MAX_FILE_COUNT,
-        'ENABLE_CHANNELS': request.app.state.config.ENABLE_CHANNELS,
-        'ENABLE_MEMORIES': request.app.state.config.ENABLE_MEMORIES,
-        'ENABLE_NOTES': request.app.state.config.ENABLE_NOTES,
-        'ENABLE_USER_WEBHOOKS': request.app.state.config.ENABLE_USER_WEBHOOKS,
-        'ENABLE_USER_STATUS': request.app.state.config.ENABLE_USER_STATUS,
-        'ENABLE_SYSTEM_NOTICE': request.app.state.config.ENABLE_SYSTEM_NOTICE,
-        'SYSTEM_NOTICE_TITLE': request.app.state.config.SYSTEM_NOTICE_TITLE,
-        'SYSTEM_NOTICE_CONTENT': request.app.state.config.SYSTEM_NOTICE_CONTENT,
-        'ENABLE_MOTD': request.app.state.config.ENABLE_MOTD,
-        'MOTD_TITLE': request.app.state.config.MOTD_TITLE,
-        'MOTD_CONTENT': request.app.state.config.MOTD_CONTENT,
-        'NOTIFICATION_SOUND_LIBRARY': request.app.state.config.NOTIFICATION_SOUND_LIBRARY,
-        'CUSTOM_EMOJI_LIBRARY': request.app.state.config.CUSTOM_EMOJI_LIBRARY,
-        'PENDING_USER_OVERLAY_TITLE': request.app.state.config.PENDING_USER_OVERLAY_TITLE,
-        'PENDING_USER_OVERLAY_CONTENT': request.app.state.config.PENDING_USER_OVERLAY_CONTENT,
-        'RESPONSE_WATERMARK': request.app.state.config.RESPONSE_WATERMARK,
-    }
-
-
-def create_session_response(request: Request, user, db, response: Response = None, set_cookie: bool = False) -> dict:
+async def create_session_response(
+    request: Request, user, db, response: Response = None, set_cookie: bool = False
+) -> dict:
     """
     Create JWT token and build session response for a user.
     Shared helper for signin, signup, ldap_auth, add_user, and token_exchange endpoints.
@@ -439,6 +539,7 @@ def create_session_response(request: Request, user, db, response: Response = Non
 
     if set_cookie and response:
         datetime_expires_at = datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc) if expires_at else None
+        max_age = int(expires_delta.total_seconds()) if expires_delta else None
         response.set_cookie(
             key='token',
             value=token,
@@ -446,12 +547,11 @@ def create_session_response(request: Request, user, db, response: Response = Non
             httponly=True,
             samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
             secure=WEBUI_AUTH_COOKIE_SECURE,
+            **({'max_age': max_age} if max_age is not None else {}),
         )
 
-    user_permissions = get_permissions(user.id, request.app.state.config.USER_PERMISSIONS, db=db)
-    auth = Auths.get_auth_by_id(user.id, db=db)
-    has_password = auth.password_login_enabled if auth else True
-    password_change_required = auth.password_change_required if auth else False
+    user_permissions = await get_permissions(user.id, request.app.state.config.USER_PERMISSIONS, db=db)
+    auth = await Auths.get_auth_by_id(user.id, db=db)
 
     return {
         'token': token,
@@ -462,13 +562,13 @@ def create_session_response(request: Request, user, db, response: Response = Non
         'name': user.name,
         'role': user.role,
         'profile_image_url': f'/api/v1/users/{user.id}/profile/image',
-        'presence_state': user.presence_state,
+        'permissions': user_permissions,
+        'presence_state': Users.normalize_presence_state(user.presence_state),
         'status_emoji': user.status_emoji,
         'status_message': user.status_message,
         'status_expires_at': user.status_expires_at,
-        'has_password': has_password,
-        'password_change_required': password_change_required,
-        'permissions': user_permissions,
+        'has_password': bool(auth and auth.password),
+        'password_change_required': bool(auth and auth.password_change_required),
     }
 
 
@@ -478,21 +578,20 @@ def create_session_response(request: Request, user, db, response: Response = Non
 
 
 class SessionUserResponse(Token, UserProfileImageResponse):
-    expires_at: Optional[int] = None
-    permissions: Optional[dict] = None
-    presence_state: Optional[str] = None
-    status_emoji: Optional[str] = None
-    status_message: Optional[str] = None
-    status_expires_at: Optional[int] = None
+    expires_at: int | None = None
+    permissions: dict | None = None
+    presence_state: str | None = None
+    status_emoji: str | None = None
+    status_message: str | None = None
+    status_expires_at: int | None = None
     has_password: bool = True
     password_change_required: bool = False
 
 
 class SessionUserInfoResponse(SessionUserResponse, UserStatus):
-    bio: Optional[str] = None
-    gender: Optional[str] = None
-    date_of_birth: Optional[datetime.date] = None
-    oauth: Optional[dict] = None
+    bio: str | None = None
+    gender: str | None = None
+    date_of_birth: datetime.date | None = None
 
 
 @router.get('/', response_model=SessionUserInfoResponse)
@@ -500,13 +599,19 @@ async def get_session_user(
     request: Request,
     response: Response,
     user=Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
-
+    token = None
     auth_header = request.headers.get('Authorization')
-    auth_token = get_http_authorization_cred(auth_header)
-    token = auth_token.credentials
-    data = decode_token(token)
+    if auth_header:
+        auth_token = get_http_authorization_cred(auth_header)
+        if auth_token is not None:
+            token = auth_token.credentials
+    if token is None:
+        token = request.cookies.get('token')
+    if token is None and getattr(request.state, 'token', None):
+        token = request.state.token.credentials
+    data = decode_token(token) if token else None
 
     expires_at = None
 
@@ -520,6 +625,7 @@ async def get_session_user(
             )
 
         # Set the cookie token
+        max_age = int(expires_at - time.time()) if expires_at else None
         response.set_cookie(
             key='token',
             value=token,
@@ -527,14 +633,13 @@ async def get_session_user(
             httponly=True,  # Ensures the cookie is not accessible via JavaScript
             samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
             secure=WEBUI_AUTH_COOKIE_SECURE,
+            **({'max_age': max_age} if max_age is not None else {}),
         )
 
-    user_permissions = get_permissions(user.id, request.app.state.config.USER_PERMISSIONS, db=db)
-    auth = Auths.get_auth_by_id(user.id, db=db)
-    has_password = auth.password_login_enabled if auth else True
-    password_change_required = auth.password_change_required if auth else False
+    user_permissions = await get_permissions(user.id, request.app.state.config.USER_PERMISSIONS, db=db)
+    auth = await Auths.get_auth_by_id(user.id, db=db)
 
-    return {
+    response_data = {
         'token': token,
         'token_type': 'Bearer',
         'expires_at': expires_at,
@@ -546,15 +651,16 @@ async def get_session_user(
         'bio': user.bio,
         'gender': user.gender,
         'date_of_birth': user.date_of_birth,
-        'oauth': user.oauth,
-        'presence_state': user.presence_state,
+        'presence_state': Users.normalize_presence_state(user.presence_state),
         'status_emoji': user.status_emoji,
         'status_message': user.status_message,
         'status_expires_at': user.status_expires_at,
-        'has_password': has_password,
-        'password_change_required': password_change_required,
+        'has_password': bool(auth and auth.password),
+        'password_change_required': bool(auth and auth.password_change_required),
         'permissions': user_permissions,
     }
+
+    return response_data
 
 
 ############################
@@ -566,10 +672,10 @@ async def get_session_user(
 async def update_profile(
     form_data: UpdateProfileForm,
     session_user=Depends(get_verified_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     if session_user:
-        user = Users.update_user_by_id(
+        user = await Users.update_user_by_id(
             session_user.id,
             form_data.model_dump(),
             db=db,
@@ -595,10 +701,10 @@ class UpdateTimezoneForm(BaseModel):
 async def update_timezone(
     form_data: UpdateTimezoneForm,
     session_user=Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     if session_user:
-        Users.update_user_by_id(
+        await Users.update_user_by_id(
             session_user.id,
             {'timezone': form_data.timezone},
             db=db,
@@ -617,41 +723,25 @@ async def update_timezone(
 async def update_password(
     form_data: UpdatePasswordForm,
     session_user=Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
+    # Trusted-header auth mode delegates passwords to the reverse proxy
     if WEBUI_AUTH_TRUSTED_EMAIL_HEADER:
-        raise HTTPException(400, detail=ERROR_MESSAGES.ACTION_PROHIBITED)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.ACTION_PROHIBITED)
     if session_user:
-        auth = Auths.get_auth_by_id(session_user.id, db=db)
-        if not auth:
-            raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
-
-        if auth.password_change_required or not auth.password_login_enabled:
-            user = session_user
-        else:
-            if not form_data.password:
-                raise HTTPException(400, detail=ERROR_MESSAGES.INCORRECT_PASSWORD)
-
-            user = Auths.authenticate_user(
-                session_user.email,
-                lambda pw: verify_password(form_data.password, pw),
-                db=db,
-            )
+        user = await Auths.authenticate_user(
+            session_user.email,
+            lambda pw: verify_password(form_data.password, pw),
+            db=db,
+        )
 
         if user:
             try:
                 validate_password(form_data.new_password)
             except Exception as e:
                 raise HTTPException(400, detail=str(e))
-
             hashed = get_password_hash(form_data.new_password)
-            return Auths.update_user_password_by_id(
-                user.id,
-                hashed,
-                password_change_required=False,
-                password_login_enabled=True,
-                db=db,
-            )
+            return await Auths.update_user_password_by_id(user.id, hashed, db=db)
         else:
             raise HTTPException(400, detail=ERROR_MESSAGES.INCORRECT_PASSWORD)
     else:
@@ -666,7 +756,7 @@ async def ldap_auth(
     request: Request,
     response: Response,
     form_data: LdapForm,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     # Security checks FIRST - before loading any config
     if not request.app.state.config.ENABLE_LDAP:
@@ -677,6 +767,14 @@ async def ldap_auth(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=ERROR_MESSAGES.ACTION_PROHIBITED,
         )
+
+    # Reject empty passwords before attempting the LDAP bind.
+    # Per RFC 4513 §5.1.2, a Simple Bind with a non-empty DN but empty
+    # password is "unauthenticated simple authentication" — many LDAP
+    # servers (OpenLDAP default, some AD configs) return success for these,
+    # which would grant access without valid credentials.
+    if not form_data.password or not form_data.password.strip():
+        raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
 
     # NOW load LDAP config variables
     LDAP_SERVER_LABEL = request.app.state.config.LDAP_SERVER_LABEL
@@ -832,27 +930,45 @@ async def ldap_auth(
             if not await asyncio.to_thread(connection_user.bind):
                 raise HTTPException(400, 'Authentication failed.')
 
-            user = Users.get_user_by_email(email, db=db)
+            user = await Users.get_user_by_email(email, db=db)
             if not user:
                 try:
-                    role = 'admin' if not Users.has_users(db=db) else request.app.state.config.DEFAULT_USER_ROLE
-
-                    user = Auths.insert_new_auth(
+                    # Insert with default role first to avoid TOCTOU race on
+                    # first-user registration.  Matches signup_handler pattern.
+                    user = await Auths.insert_new_auth(
                         email=email,
                         password=str(uuid.uuid4()),
                         name=cn,
-                        role=role,
+                        role=request.app.state.config.DEFAULT_USER_ROLE,
                         db=db,
                     )
 
                     if not user:
                         raise HTTPException(500, detail=ERROR_MESSAGES.CREATE_USER_ERROR)
 
-                    apply_default_group_assignment(
+                    # Atomically check if this is the only user *after* the
+                    # insert.  Only the single user present should become admin.
+                    if await Users.get_num_users(db=db) == 1:
+                        await Users.update_user_role_by_id(user.id, 'admin', db=db)
+                        user = await Users.get_user_by_id(user.id, db=db)
+
+                    await apply_default_group_assignment(
                         request.app.state.config.DEFAULT_GROUP_ID,
                         user.id,
                         db=db,
                     )
+
+                    if request.app.state.config.WEBHOOK_URL:
+                        await post_webhook(
+                            request.app.state.WEBUI_NAME,
+                            request.app.state.config.WEBHOOK_URL,
+                            WEBHOOK_MESSAGES.USER_SIGNUP(user.name),
+                            {
+                                'action': 'signup',
+                                'message': WEBHOOK_MESSAGES.USER_SIGNUP(user.name),
+                                'user': user.model_dump_json(exclude_none=True),
+                            },
+                        )
 
                 except HTTPException:
                     raise
@@ -860,19 +976,19 @@ async def ldap_auth(
                     log.error(f'LDAP user creation error: {str(err)}')
                     raise HTTPException(500, detail='Internal error occurred during LDAP user creation.')
 
-            user = Auths.authenticate_user_by_email(email, db=db)
+            user = await Auths.authenticate_user_by_email(email, db=db)
 
             if user:
-                if user.role != 'admin' and ENABLE_LDAP_GROUP_MANAGEMENT and user_groups:
+                if ENABLE_LDAP_GROUP_MANAGEMENT and user_groups:
                     if ENABLE_LDAP_GROUP_CREATION:
-                        Groups.create_groups_by_group_names(user.id, user_groups, db=db)
+                        await Groups.create_groups_by_group_names(user.id, user_groups, db=db)
                     try:
-                        Groups.sync_groups_by_group_names(user.id, user_groups, db=db)
+                        await Groups.sync_groups_by_group_names(user.id, user_groups, db=db)
                         log.info(f'Successfully synced groups for user {user.id}: {user_groups}')
                     except Exception as e:
                         log.error(f'Failed to sync groups for user {user.id}: {e}')
 
-                return create_session_response(request, user, db, response, set_cookie=True)
+                return await create_session_response(request, user, db, response, set_cookie=True)
             else:
                 raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
         else:
@@ -892,7 +1008,7 @@ async def signin(
     request: Request,
     response: Response,
     form_data: SigninForm,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     if not ENABLE_PASSWORD_AUTH:
         raise HTTPException(
@@ -902,7 +1018,7 @@ async def signin(
 
     if WEBUI_AUTH_TRUSTED_EMAIL_HEADER:
         if WEBUI_AUTH_TRUSTED_EMAIL_HEADER not in request.headers:
-            raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_TRUSTED_HEADER)
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_TRUSTED_HEADER)
 
         email = request.headers[WEBUI_AUTH_TRUSTED_EMAIL_HEADER].lower()
         name = email
@@ -914,7 +1030,7 @@ async def signin(
             except Exception as e:
                 pass
 
-        if not Users.get_user_by_email(email.lower(), db=db):
+        if not await Users.get_user_by_email(email.lower(), db=db):
             await signup_handler(
                 request,
                 email,
@@ -923,26 +1039,35 @@ async def signin(
                 db=db,
             )
 
-        user = Auths.authenticate_user_by_email(email, db=db)
-        if WEBUI_AUTH_TRUSTED_GROUPS_HEADER and user and user.role != 'admin':
-            group_names = request.headers.get(WEBUI_AUTH_TRUSTED_GROUPS_HEADER, '').split(',')
-            group_names = [name.strip() for name in group_names if name.strip()]
+        user = await Auths.authenticate_user_by_email(email, db=db)
+        if user:
+            if WEBUI_AUTH_TRUSTED_GROUPS_HEADER:
+                group_names = request.headers.get(WEBUI_AUTH_TRUSTED_GROUPS_HEADER, '').split(',')
+                group_names = [name.strip() for name in group_names if name.strip()]
 
-            if group_names:
-                Groups.sync_groups_by_group_names(user.id, group_names, db=db)
+                if group_names:
+                    await Groups.sync_groups_by_group_names(user.id, group_names, db=db)
+
+            if WEBUI_AUTH_TRUSTED_ROLE_HEADER:
+                trusted_role = request.headers.get(WEBUI_AUTH_TRUSTED_ROLE_HEADER, '').lower().strip()
+                if trusted_role in {'admin', 'user', 'pending'}:
+                    if user.role != trusted_role:
+                        await Users.update_user_role_by_id(user.id, trusted_role, db=db)
+                elif trusted_role:
+                    log.warning(f'Ignoring invalid trusted role header value: {trusted_role}')
 
     elif WEBUI_AUTH == False:
         admin_email = 'admin@localhost'
         admin_password = 'admin'
 
-        if Users.get_user_by_email(admin_email.lower(), db=db):
-            user = Auths.authenticate_user(
+        if await Users.get_user_by_email(admin_email.lower(), db=db):
+            user = await Auths.authenticate_user(
                 admin_email.lower(),
                 lambda pw: verify_password(admin_password, pw),
                 db=db,
             )
         else:
-            if Users.has_users(db=db):
+            if await Users.has_users(db=db):
                 raise HTTPException(400, detail=ERROR_MESSAGES.EXISTING_USERS)
 
             await signup_handler(
@@ -953,7 +1078,7 @@ async def signin(
                 db=db,
             )
 
-            user = Auths.authenticate_user(
+            user = await Auths.authenticate_user(
                 admin_email.lower(),
                 lambda pw: verify_password(admin_password, pw),
                 db=db,
@@ -974,14 +1099,14 @@ async def signin(
             # decode safely — ignore incomplete UTF-8 sequences
             form_data.password = password_bytes.decode('utf-8', errors='ignore')
 
-        user = Auths.authenticate_user(
+        user = await Auths.authenticate_user(
             form_data.email.lower(),
             lambda pw: verify_password(form_data.password, pw),
             db=db,
         )
 
     if user:
-        return create_session_response(request, user, db, response, set_cookie=True)
+        return await create_session_response(request, user, db, response, set_cookie=True)
     else:
         raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
 
@@ -998,7 +1123,7 @@ async def signup_handler(
     name: str,
     profile_image_url: str = '/user.png',
     *,
-    db: Session,
+    db: AsyncSession,
 ) -> UserModel:
     """
     Core user-creation logic shared by the signup endpoint and
@@ -1012,7 +1137,7 @@ async def signup_handler(
     # first-user registration can all see an empty table and each get admin.
     hashed = get_password_hash(password)
 
-    user = Auths.insert_new_auth(
+    user = await Auths.insert_new_auth(
         email=email.lower(),
         password=hashed,
         name=name,
@@ -1025,9 +1150,9 @@ async def signup_handler(
 
     # Atomically check if this is the only user *after* the insert.
     # Only the single user present at this point should become admin.
-    if Users.get_num_users(db=db) == 1:
-        Users.update_user_role_by_id(user.id, 'admin', db=db)
-        user = Users.get_user_by_id(user.id, db=db)
+    if await Users.get_num_users(db=db) == 1:
+        await Users.update_user_role_by_id(user.id, 'admin', db=db)
+        user = await Users.get_user_by_id(user.id, db=db)
         request.app.state.config.ENABLE_SIGNUP = False
 
     if request.app.state.config.WEBHOOK_URL:
@@ -1042,7 +1167,7 @@ async def signup_handler(
             },
         )
 
-    apply_default_group_assignment(
+    await apply_default_group_assignment(
         request.app.state.config.DEFAULT_GROUP_ID,
         user.id,
         db=db,
@@ -1056,18 +1181,17 @@ async def signup(
     request: Request,
     response: Response,
     form_data: SignupForm,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
-    has_users = Users.has_users(db=db)
+    has_users = await Users.has_users(db=db)
 
     if WEBUI_AUTH:
-        if not request.app.state.config.ENABLE_SIGNUP or not request.app.state.config.ENABLE_LOGIN_FORM:
-            if has_users or not ENABLE_INITIAL_ADMIN_SIGNUP:
+        if has_users:
+            if not request.app.state.config.ENABLE_SIGNUP or not request.app.state.config.ENABLE_LOGIN_FORM:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
-
-        if not request.app.state.config.ENABLE_PASSWORD_SIGNUP:
-            if has_users or not ENABLE_INITIAL_ADMIN_SIGNUP:
-                raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+        # Don't gate the first admin on ENABLE_SIGNUP: it auto-disables and can persist stale across a DB reset.
+        elif not request.app.state.config.ENABLE_LOGIN_FORM and not ENABLE_INITIAL_ADMIN_SIGNUP:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
     else:
         if has_users:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
@@ -1075,7 +1199,7 @@ async def signup(
     if not validate_email_format(form_data.email.lower()):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT)
 
-    if Users.get_user_by_email(form_data.email.lower(), db=db):
+    if await Users.get_user_by_email(form_data.email.lower(), db=db):
         raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
 
     try:
@@ -1091,7 +1215,10 @@ async def signup(
                 consumed_by=form_data.email.lower(),
             )
             if not valid_invite:
-                raise HTTPException(400, detail=invite_error)
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    detail=invite_error or ERROR_MESSAGES.ACCESS_PROHIBITED,
+                )
 
         user = await signup_handler(
             request,
@@ -1101,7 +1228,7 @@ async def signup(
             form_data.profile_image_url,
             db=db,
         )
-        return create_session_response(request, user, db, response, set_cookie=True)
+        return await create_session_response(request, user, db, response, set_cookie=True)
     except HTTPException:
         raise
     except Exception as err:
@@ -1109,16 +1236,16 @@ async def signup(
         raise HTTPException(500, detail='An internal error occurred during signup.')
 
 
-@router.get('/signout')
-async def signout(request: Request, response: Response, db: Session = Depends(get_session)):
-
+@router.post('/signout')
+async def signout(request: Request, response: Response, db: AsyncSession = Depends(get_async_session)):
     # get auth token from headers or cookies
     token = None
     auth_header = request.headers.get('Authorization')
     if auth_header:
         auth_cred = get_http_authorization_cred(auth_header)
-        token = auth_cred.credentials
-    else:
+        if auth_cred is not None:
+            token = auth_cred.credentials
+    if token is None:
         token = request.cookies.get('token')
 
     if token:
@@ -1132,8 +1259,10 @@ async def signout(request: Request, response: Response, db: Session = Depends(ge
     if oauth_session_id:
         response.delete_cookie('oauth_session_id')
 
-        session = OAuthSessions.get_session_by_id(oauth_session_id, db=db)
+        session = await OAuthSessions.get_session_by_id(oauth_session_id, db=db)
 
+        # If a custom end_session_endpoint is configured (e.g. AWS Cognito), redirect
+        # there directly instead of attempting OIDC discovery.
         if OPENID_END_SESSION_ENDPOINT.value:
             return JSONResponse(
                 status_code=200,
@@ -1152,7 +1281,7 @@ async def signout(request: Request, response: Response, db: Session = Depends(ge
             oauth_id_token = session.token.get('id_token')
             try:
                 async with ClientSession(trust_env=True) as session:
-                    async with session.get(oauth_server_metadata_url) as r:
+                    async with session.get(oauth_server_metadata_url, ssl=AIOHTTP_CLIENT_SESSION_SSL) as r:
                         if r.status == 200:
                             openid_data = await r.json()
                             logout_url = openid_data.get('end_session_endpoint')
@@ -1196,6 +1325,31 @@ async def signout(request: Request, response: Response, db: Session = Depends(ge
 
 
 ############################
+# OAuth Session Management
+############################
+
+
+@router.delete('/oauth/sessions/{provider:path}', response_model=bool)
+async def delete_oauth_session_by_provider(
+    provider: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """
+    Disconnect the current user's OAuth session for a specific provider.
+    The provider string matches the 'provider' field in the oauth_session table
+    (e.g. 'mcp:server-id' for MCP connections).
+    """
+    result = await OAuthSessions.delete_sessions_by_user_id_and_provider(user.id, provider, db=db)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='No OAuth session found for this provider',
+        )
+    return True
+
+
+############################
 # AddUser
 ############################
 
@@ -1205,12 +1359,12 @@ async def add_user(
     request: Request,
     form_data: AddUserForm,
     user=Depends(get_admin_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     if not validate_email_format(form_data.email.lower()):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT)
 
-    if Users.get_user_by_email(form_data.email.lower(), db=db):
+    if await Users.get_user_by_email(form_data.email.lower(), db=db):
         raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
 
     try:
@@ -1220,7 +1374,7 @@ async def add_user(
             raise HTTPException(400, detail=str(e))
 
         hashed = get_password_hash(form_data.password)
-        user = Auths.insert_new_auth(
+        user = await Auths.insert_new_auth(
             form_data.email.lower(),
             hashed,
             form_data.name,
@@ -1230,13 +1384,14 @@ async def add_user(
         )
 
         if user:
-            apply_default_group_assignment(
+            await apply_default_group_assignment(
                 request.app.state.config.DEFAULT_GROUP_ID,
                 user.id,
                 db=db,
             )
 
-            token = create_token(data={'id': user.id})
+            expires_delta = parse_duration(request.app.state.config.JWT_EXPIRES_IN)
+            token = create_token(data={'id': user.id}, expires_delta=expires_delta)
             return {
                 'token': token,
                 'token_type': 'Bearer',
@@ -1261,7 +1416,9 @@ async def add_user(
 
 
 @router.get('/admin/details')
-async def get_admin_details(request: Request, user=Depends(get_current_user), db: Session = Depends(get_session)):
+async def get_admin_details(
+    request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_async_session)
+):
     if request.app.state.config.SHOW_ADMIN_DETAILS:
         admin_email = request.app.state.config.ADMIN_EMAIL
         admin_name = None
@@ -1269,11 +1426,11 @@ async def get_admin_details(request: Request, user=Depends(get_current_user), db
         log.info(f'Admin details - Email: {admin_email}, Name: {admin_name}')
 
         if admin_email:
-            admin = Users.get_user_by_email(admin_email, db=db)
+            admin = await Users.get_user_by_email(admin_email, db=db)
             if admin:
                 admin_name = admin.name
         else:
-            admin = Users.get_first_user(db=db)
+            admin = await Users.get_first_user(db=db)
             if admin:
                 admin_email = admin.email
                 admin_name = admin.name
@@ -1296,11 +1453,59 @@ async def get_admin_config(request: Request, user=Depends(get_admin_user)):
     return _serialize_admin_config(request)
 
 
+class AdminConfig(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
+
+async def _can_user_create_invite_codes(user, config, db: AsyncSession) -> tuple[bool, str, int]:
+    if not user:
+        return False, 'Authentication required.', 0
+
+    if user.role == 'admin':
+        return True, '', 0
+
+    policy = get_invite_policy(config)
+    scope = policy['creator_scope']
+
+    if scope == 'admin':
+        return False, 'Only admins can create invite codes.', 0
+
+    if scope == 'groups':
+        allowed_group_ids = set(policy['creator_group_ids'])
+        if not allowed_group_ids:
+            return False, 'No creator groups are configured.', 0
+
+        groups = await Groups.get_groups_by_member_id(user.id, db=db)
+        if not {group.id for group in groups}.intersection(allowed_group_ids):
+            return False, 'You do not have permission to create invite codes.', 0
+        return True, '', 0
+
+    cooldown_seconds = policy['creator_cooldown_seconds']
+    if cooldown_seconds <= 0:
+        return True, '', 0
+
+    now = int(time.time())
+    latest_created_at = max(
+        [
+            int(invite.get('created_at') or 0)
+            for invite in get_clean_invite_codes(config)
+            if invite.get('created_by') == user.id
+        ]
+        or [0]
+    )
+    remaining = latest_created_at + cooldown_seconds - now
+    if remaining > 0:
+        return False, f'Invite creation cooldown is active. Try again in {remaining} seconds.', remaining
+
+    return True, '', 0
+
+
 @router.get('/invites')
 async def get_invite_codes(
     request: Request,
     user=Depends(get_verified_user),
 ):
+    _ensure_invite_config_keys(request)
     return {'items': get_invite_codes_for_user(user, request.app.state.config)}
 
 
@@ -1308,9 +1513,10 @@ async def get_invite_codes(
 async def issue_invite_code(
     request: Request,
     user=Depends(get_verified_user),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
-    can_create, reason, _ = can_user_create_invite_codes(user, request.app.state.config, db=db)
+    _ensure_invite_config_keys(request)
+    can_create, reason, _ = await _can_user_create_invite_codes(user, request.app.state.config, db=db)
     if not can_create:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1318,12 +1524,12 @@ async def issue_invite_code(
         )
 
     try:
-        invite = create_invite_code(request.app.state.config, user.id)
-        return invite
-    except Exception:
+        return create_invite_code(request.app.state.config, user.id)
+    except Exception as e:
+        log.exception('Failed to create invite code')
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail='Failed to create invite code.',
+            detail=f'Failed to create invite code: {e}',
         )
 
 
@@ -1333,6 +1539,7 @@ async def delete_invite_code(
     request: Request,
     user=Depends(get_verified_user),
 ):
+    _ensure_invite_config_keys(request)
     all_invite_codes = get_clean_invite_codes(request.app.state.config)
 
     match_idx = None
@@ -1355,315 +1562,38 @@ async def delete_invite_code(
     return {'status': True}
 
 
-class AdminConfig(BaseModel):
-    SHOW_ADMIN_DETAILS: bool
-    ADMIN_EMAIL: Optional[str] = None
-    WEBUI_URL: str
-    ENABLE_SIGNUP: bool
-    ENABLE_PASSWORD_SIGNUP: bool = True
-    ENABLE_OAUTH_LOGIN: bool = True
-    ENABLE_OAUTH_SIGNUP: bool = False
-    OAUTH_ALLOWED_LOGIN_PROVIDERS: Optional[List[str]] = None
-    OAUTH_ALLOWED_SIGNUP_PROVIDERS: Optional[List[str]] = None
-    OAUTH_MERGE_ACCOUNTS_BY_EMAIL: bool = False
-    OAUTH_TIMEOUT: str = ''
-    OAUTH_AUDIENCE: str = ''
-    GOOGLE_OAUTH_ENABLED: bool = True
-    GOOGLE_CLIENT_ID: str = ''
-    GOOGLE_CLIENT_SECRET: str = ''
-    GOOGLE_OAUTH_SCOPE: str = 'openid email profile'
-    GOOGLE_SERVER_METADATA_URL: str = 'https://accounts.google.com/.well-known/openid-configuration'
-    GOOGLE_REDIRECT_URI: str = ''
-    MICROSOFT_OAUTH_ENABLED: bool = True
-    MICROSOFT_CLIENT_ID: str = ''
-    MICROSOFT_CLIENT_SECRET: str = ''
-    MICROSOFT_CLIENT_TENANT_ID: str = ''
-    MICROSOFT_CLIENT_LOGIN_BASE_URL: str = 'https://login.microsoftonline.com'
-    MICROSOFT_CLIENT_PICTURE_URL: str = 'https://graph.microsoft.com/v1.0/me/photo/$value'
-    MICROSOFT_OAUTH_SCOPE: str = 'openid email profile'
-    MICROSOFT_REDIRECT_URI: str = ''
-    GITHUB_OAUTH_ENABLED: bool = True
-    GITHUB_CLIENT_ID: str = ''
-    GITHUB_CLIENT_SECRET: str = ''
-    GITHUB_CLIENT_SCOPE: str = 'user:email'
-    GITHUB_CLIENT_REDIRECT_URI: str = ''
-    GITHUB_ACCESS_TOKEN_URL: str = 'https://github.com/login/oauth/access_token'
-    GITHUB_AUTHORIZE_URL: str = 'https://github.com/login/oauth/authorize'
-    GITHUB_API_BASE_URL: str = 'https://api.github.com'
-    GITHUB_USERINFO_ENDPOINT: str = 'https://api.github.com/user'
-    OIDC_OAUTH_ENABLED: bool = True
-    OAUTH_PROVIDER_NAME: str = 'SSO'
-    OAUTH_CLIENT_ID: str = ''
-    OAUTH_CLIENT_SECRET: str = ''
-    OPENID_PROVIDER_URL: str = ''
-    OPENID_REDIRECT_URI: str = ''
-    OAUTH_SCOPES: str = 'openid email profile'
-    OAUTH_TOKEN_ENDPOINT_AUTH_METHOD: Optional[str] = None
-    OAUTH_CODE_CHALLENGE_METHOD: Optional[str] = None
-    OAUTH_SUB_CLAIM: Optional[str] = None
-    OAUTH_USERNAME_CLAIM: str = 'name'
-    OAUTH_EMAIL_CLAIM: str = 'email'
-    OAUTH_PICTURE_CLAIM: str = 'picture'
-    OAUTH_GROUPS_CLAIM: str = 'groups'
-    FEISHU_OAUTH_ENABLED: bool = True
-    FEISHU_CLIENT_ID: str = ''
-    FEISHU_CLIENT_SECRET: str = ''
-    FEISHU_OAUTH_SCOPE: str = 'contact:user.base:readonly'
-    FEISHU_REDIRECT_URI: str = ''
-    FEISHU_ACCESS_TOKEN_URL: str = 'https://open.feishu.cn/open-apis/authen/v2/oauth/token'
-    FEISHU_AUTHORIZE_URL: str = 'https://accounts.feishu.cn/open-apis/authen/v1/authorize'
-    FEISHU_API_BASE_URL: str = 'https://open.feishu.cn/open-apis'
-    FEISHU_USERINFO_ENDPOINT: str = 'https://open.feishu.cn/open-apis/authen/v1/user_info'
-    DISCORD_OAUTH_ENABLED: bool = True
-    DISCORD_CLIENT_ID: str = ''
-    DISCORD_CLIENT_SECRET: str = ''
-    DISCORD_OAUTH_SCOPE: str = 'identify email'
-    DISCORD_REDIRECT_URI: str = ''
-    DISCORD_ACCESS_TOKEN_URL: str = 'https://discord.com/api/oauth2/token'
-    DISCORD_AUTHORIZE_URL: str = 'https://discord.com/oauth2/authorize'
-    DISCORD_API_BASE_URL: str = 'https://discord.com/api'
-    DISCORD_USERINFO_ENDPOINT: str = 'https://discord.com/api/users/@me'
-    GITLAB_OAUTH_ENABLED: bool = True
-    GITLAB_CLIENT_ID: str = ''
-    GITLAB_CLIENT_SECRET: str = ''
-    GITLAB_OAUTH_SCOPE: str = 'openid profile email'
-    GITLAB_REDIRECT_URI: str = ''
-    GITLAB_ACCESS_TOKEN_URL: str = 'https://gitlab.com/oauth/token'
-    GITLAB_AUTHORIZE_URL: str = 'https://gitlab.com/oauth/authorize'
-    GITLAB_API_BASE_URL: str = 'https://gitlab.com/api/v4'
-    GITLAB_USERINFO_ENDPOINT: str = 'https://gitlab.com/oauth/userinfo'
-    SLACK_OAUTH_ENABLED: bool = True
-    SLACK_CLIENT_ID: str = ''
-    SLACK_CLIENT_SECRET: str = ''
-    SLACK_OAUTH_SCOPE: str = 'openid profile email'
-    SLACK_REDIRECT_URI: str = ''
-    SLACK_ACCESS_TOKEN_URL: str = 'https://slack.com/api/openid.connect.token'
-    SLACK_AUTHORIZE_URL: str = 'https://slack.com/openid/connect/authorize'
-    SLACK_API_BASE_URL: str = 'https://slack.com/api'
-    SLACK_USERINFO_ENDPOINT: str = 'https://slack.com/api/openid.connect.userInfo'
-    ENABLE_INVITE_ONLY_AUTH: bool = False
-    INVITE_CREATOR_SCOPE: str = 'admin'
-    INVITE_CREATOR_GROUP_IDS: List[str] = Field(default_factory=list)
-    INVITE_CREATOR_COOLDOWN_SECONDS: int = 3600
-    INVITE_CODE_LENGTH: int = 8
-    INVITE_CODE_TTL_SECONDS: int = 604800
-    INVITE_CODE_PREFIX: str = ''
-    INVITE_CODE_REUSABLE: bool = False
-    INVITE_CODE_MAX_USES: int = 1
-    ENABLE_API_KEYS: bool
-    ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS: bool
-    API_KEYS_ALLOWED_ENDPOINTS: str
-    DEFAULT_USER_ROLE: str
-    DEFAULT_GROUP_ID: str
-    JWT_EXPIRES_IN: str
-    ENABLE_COMMUNITY_SHARING: bool
-    ENABLE_MESSAGE_RATING: bool
-    ENABLE_FOLDERS: bool
-    FOLDER_MAX_FILE_COUNT: Optional[int | str] = None
-    ENABLE_CHANNELS: bool
-    ENABLE_MEMORIES: bool
-    ENABLE_NOTES: bool
-    ENABLE_USER_WEBHOOKS: bool
-    ENABLE_USER_STATUS: bool
-    ENABLE_SYSTEM_NOTICE: bool = False
-    SYSTEM_NOTICE_TITLE: Optional[str] = 'System Notice'
-    SYSTEM_NOTICE_CONTENT: Optional[str] = ''
-    ENABLE_MOTD: bool = False
-    MOTD_TITLE: Optional[str] = 'Message of the day!'
-    MOTD_CONTENT: Optional[str] = ''
-    NOTIFICATION_SOUND_LIBRARY: List[dict] = Field(default_factory=list)
-    CUSTOM_EMOJI_LIBRARY: List[dict] = Field(default_factory=list)
-    PENDING_USER_OVERLAY_TITLE: Optional[str] = None
-    PENDING_USER_OVERLAY_CONTENT: Optional[str] = None
-    RESPONSE_WATERMARK: Optional[str] = None
-
-
 @router.post('/admin/config')
 async def update_admin_config(request: Request, form_data: AdminConfig, user=Depends(get_admin_user)):
-    request.app.state.config.SHOW_ADMIN_DETAILS = form_data.SHOW_ADMIN_DETAILS
-    request.app.state.config.ADMIN_EMAIL = form_data.ADMIN_EMAIL
-    request.app.state.config.WEBUI_URL = form_data.WEBUI_URL
-    request.app.state.config.ENABLE_SIGNUP = form_data.ENABLE_SIGNUP
-    request.app.state.config.ENABLE_PASSWORD_SIGNUP = form_data.ENABLE_PASSWORD_SIGNUP
-    request.app.state.config.ENABLE_OAUTH_LOGIN = form_data.ENABLE_OAUTH_LOGIN
-    request.app.state.config.ENABLE_OAUTH_SIGNUP = form_data.ENABLE_OAUTH_SIGNUP
-    request.app.state.config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL = form_data.OAUTH_MERGE_ACCOUNTS_BY_EMAIL
-    request.app.state.config.OAUTH_TIMEOUT = _sanitize_oauth_timeout(form_data.OAUTH_TIMEOUT)
-    request.app.state.config.OAUTH_AUDIENCE = _sanitize_text(form_data.OAUTH_AUDIENCE, 256)
+    payload = form_data.model_dump(exclude_unset=True)
+    oauth_changed = False
 
-    request.app.state.config.GOOGLE_OAUTH_ENABLED = form_data.GOOGLE_OAUTH_ENABLED
-    request.app.state.config.GOOGLE_CLIENT_ID = _sanitize_text(form_data.GOOGLE_CLIENT_ID, 512)
-    request.app.state.config.GOOGLE_CLIENT_SECRET = _sanitize_text(form_data.GOOGLE_CLIENT_SECRET, 1024)
-    request.app.state.config.GOOGLE_OAUTH_SCOPE = _sanitize_text(form_data.GOOGLE_OAUTH_SCOPE, 512)
-    request.app.state.config.GOOGLE_SERVER_METADATA_URL = _sanitize_text(form_data.GOOGLE_SERVER_METADATA_URL, 1024)
-    request.app.state.config.GOOGLE_REDIRECT_URI = _sanitize_text(form_data.GOOGLE_REDIRECT_URI, 1024)
+    for key, value in payload.items():
+        if key not in ADMIN_CONFIG_KEYS:
+            continue
 
-    request.app.state.config.MICROSOFT_OAUTH_ENABLED = form_data.MICROSOFT_OAUTH_ENABLED
-    request.app.state.config.MICROSOFT_CLIENT_ID = _sanitize_text(form_data.MICROSOFT_CLIENT_ID, 512)
-    request.app.state.config.MICROSOFT_CLIENT_SECRET = _sanitize_text(form_data.MICROSOFT_CLIENT_SECRET, 1024)
-    request.app.state.config.MICROSOFT_CLIENT_TENANT_ID = _sanitize_text(form_data.MICROSOFT_CLIENT_TENANT_ID, 256)
-    request.app.state.config.MICROSOFT_CLIENT_LOGIN_BASE_URL = _sanitize_text(
-        form_data.MICROSOFT_CLIENT_LOGIN_BASE_URL, 1024
-    )
-    request.app.state.config.MICROSOFT_CLIENT_PICTURE_URL = _sanitize_text(form_data.MICROSOFT_CLIENT_PICTURE_URL, 1024)
-    request.app.state.config.MICROSOFT_OAUTH_SCOPE = _sanitize_text(form_data.MICROSOFT_OAUTH_SCOPE, 512)
-    request.app.state.config.MICROSOFT_REDIRECT_URI = _sanitize_text(form_data.MICROSOFT_REDIRECT_URI, 1024)
+        sanitized = _sanitize_admin_config_value(key, value)
+        if sanitized is None and key in {'DEFAULT_USER_ROLE', 'JWT_EXPIRES_IN'}:
+            continue
 
-    request.app.state.config.GITHUB_OAUTH_ENABLED = form_data.GITHUB_OAUTH_ENABLED
-    request.app.state.config.GITHUB_CLIENT_ID = _sanitize_text(form_data.GITHUB_CLIENT_ID, 512)
-    request.app.state.config.GITHUB_CLIENT_SECRET = _sanitize_text(form_data.GITHUB_CLIENT_SECRET, 1024)
-    request.app.state.config.GITHUB_CLIENT_SCOPE = _sanitize_text(form_data.GITHUB_CLIENT_SCOPE, 512)
-    request.app.state.config.GITHUB_CLIENT_REDIRECT_URI = _sanitize_text(form_data.GITHUB_CLIENT_REDIRECT_URI, 1024)
-    request.app.state.config.GITHUB_ACCESS_TOKEN_URL = _sanitize_text(form_data.GITHUB_ACCESS_TOKEN_URL, 1024)
-    request.app.state.config.GITHUB_AUTHORIZE_URL = _sanitize_text(form_data.GITHUB_AUTHORIZE_URL, 1024)
-    request.app.state.config.GITHUB_API_BASE_URL = _sanitize_text(form_data.GITHUB_API_BASE_URL, 1024)
-    request.app.state.config.GITHUB_USERINFO_ENDPOINT = _sanitize_text(form_data.GITHUB_USERINFO_ENDPOINT, 1024)
+        if not _ensure_config_key(request, key, sanitized):
+            log.debug(f'Skipping unknown admin config key: {key}')
+            continue
 
-    request.app.state.config.OIDC_OAUTH_ENABLED = form_data.OIDC_OAUTH_ENABLED
-    request.app.state.config.OAUTH_PROVIDER_NAME = _sanitize_text(form_data.OAUTH_PROVIDER_NAME, 128)
-    request.app.state.config.OAUTH_CLIENT_ID = _sanitize_text(form_data.OAUTH_CLIENT_ID, 512)
-    request.app.state.config.OAUTH_CLIENT_SECRET = _sanitize_text(form_data.OAUTH_CLIENT_SECRET, 1024)
-    request.app.state.config.OPENID_PROVIDER_URL = _sanitize_text(form_data.OPENID_PROVIDER_URL, 1024)
-    request.app.state.config.OPENID_REDIRECT_URI = _sanitize_text(form_data.OPENID_REDIRECT_URI, 1024)
-    request.app.state.config.OAUTH_SCOPES = _sanitize_text(form_data.OAUTH_SCOPES, 512)
-    request.app.state.config.OAUTH_TOKEN_ENDPOINT_AUTH_METHOD = (
-        _sanitize_text(form_data.OAUTH_TOKEN_ENDPOINT_AUTH_METHOD, 64) or None
-    )
-    request.app.state.config.OAUTH_CODE_CHALLENGE_METHOD = _sanitize_oauth_code_challenge_method(
-        form_data.OAUTH_CODE_CHALLENGE_METHOD
-    )
-    request.app.state.config.OAUTH_SUB_CLAIM = _sanitize_text(form_data.OAUTH_SUB_CLAIM, 128) or None
-    request.app.state.config.OAUTH_USERNAME_CLAIM = _sanitize_text(form_data.OAUTH_USERNAME_CLAIM, 128)
-    request.app.state.config.OAUTH_EMAIL_CLAIM = _sanitize_text(form_data.OAUTH_EMAIL_CLAIM, 128)
-    request.app.state.config.OAUTH_PICTURE_CLAIM = _sanitize_text(form_data.OAUTH_PICTURE_CLAIM, 128)
-    request.app.state.config.OAUTH_GROUPS_CLAIM = _sanitize_text(form_data.OAUTH_GROUPS_CLAIM, 128)
+        setattr(request.app.state.config, key, sanitized)
+        if 'OAUTH' in key or key.startswith(('GOOGLE_', 'MICROSOFT_', 'GITHUB_', 'OIDC_', 'FEISHU_', 'DISCORD_', 'GITLAB_', 'SLACK_')):
+            oauth_changed = True
 
-    request.app.state.config.FEISHU_OAUTH_ENABLED = form_data.FEISHU_OAUTH_ENABLED
-    request.app.state.config.FEISHU_CLIENT_ID = _sanitize_text(form_data.FEISHU_CLIENT_ID, 512)
-    request.app.state.config.FEISHU_CLIENT_SECRET = _sanitize_text(form_data.FEISHU_CLIENT_SECRET, 1024)
-    request.app.state.config.FEISHU_OAUTH_SCOPE = _sanitize_text(form_data.FEISHU_OAUTH_SCOPE, 512)
-    request.app.state.config.FEISHU_REDIRECT_URI = _sanitize_text(form_data.FEISHU_REDIRECT_URI, 1024)
-    request.app.state.config.FEISHU_ACCESS_TOKEN_URL = _sanitize_text(form_data.FEISHU_ACCESS_TOKEN_URL, 1024)
-    request.app.state.config.FEISHU_AUTHORIZE_URL = _sanitize_text(form_data.FEISHU_AUTHORIZE_URL, 1024)
-    request.app.state.config.FEISHU_API_BASE_URL = _sanitize_text(form_data.FEISHU_API_BASE_URL, 1024)
-    request.app.state.config.FEISHU_USERINFO_ENDPOINT = _sanitize_text(form_data.FEISHU_USERINFO_ENDPOINT, 1024)
-
-    request.app.state.config.DISCORD_OAUTH_ENABLED = form_data.DISCORD_OAUTH_ENABLED
-    request.app.state.config.DISCORD_CLIENT_ID = _sanitize_text(form_data.DISCORD_CLIENT_ID, 512)
-    request.app.state.config.DISCORD_CLIENT_SECRET = _sanitize_text(form_data.DISCORD_CLIENT_SECRET, 1024)
-    request.app.state.config.DISCORD_OAUTH_SCOPE = _sanitize_text(form_data.DISCORD_OAUTH_SCOPE, 512)
-    request.app.state.config.DISCORD_REDIRECT_URI = _sanitize_text(form_data.DISCORD_REDIRECT_URI, 1024)
-    request.app.state.config.DISCORD_ACCESS_TOKEN_URL = _sanitize_text(form_data.DISCORD_ACCESS_TOKEN_URL, 1024)
-    request.app.state.config.DISCORD_AUTHORIZE_URL = _sanitize_text(form_data.DISCORD_AUTHORIZE_URL, 1024)
-    request.app.state.config.DISCORD_API_BASE_URL = _sanitize_text(form_data.DISCORD_API_BASE_URL, 1024)
-    request.app.state.config.DISCORD_USERINFO_ENDPOINT = _sanitize_text(form_data.DISCORD_USERINFO_ENDPOINT, 1024)
-
-    request.app.state.config.GITLAB_OAUTH_ENABLED = form_data.GITLAB_OAUTH_ENABLED
-    request.app.state.config.GITLAB_CLIENT_ID = _sanitize_text(form_data.GITLAB_CLIENT_ID, 512)
-    request.app.state.config.GITLAB_CLIENT_SECRET = _sanitize_text(form_data.GITLAB_CLIENT_SECRET, 1024)
-    request.app.state.config.GITLAB_OAUTH_SCOPE = _sanitize_text(form_data.GITLAB_OAUTH_SCOPE, 512)
-    request.app.state.config.GITLAB_REDIRECT_URI = _sanitize_text(form_data.GITLAB_REDIRECT_URI, 1024)
-    request.app.state.config.GITLAB_ACCESS_TOKEN_URL = _sanitize_text(form_data.GITLAB_ACCESS_TOKEN_URL, 1024)
-    request.app.state.config.GITLAB_AUTHORIZE_URL = _sanitize_text(form_data.GITLAB_AUTHORIZE_URL, 1024)
-    request.app.state.config.GITLAB_API_BASE_URL = _sanitize_text(form_data.GITLAB_API_BASE_URL, 1024)
-    request.app.state.config.GITLAB_USERINFO_ENDPOINT = _sanitize_text(form_data.GITLAB_USERINFO_ENDPOINT, 1024)
-
-    request.app.state.config.SLACK_OAUTH_ENABLED = form_data.SLACK_OAUTH_ENABLED
-    request.app.state.config.SLACK_CLIENT_ID = _sanitize_text(form_data.SLACK_CLIENT_ID, 512)
-    request.app.state.config.SLACK_CLIENT_SECRET = _sanitize_text(form_data.SLACK_CLIENT_SECRET, 1024)
-    request.app.state.config.SLACK_OAUTH_SCOPE = _sanitize_text(form_data.SLACK_OAUTH_SCOPE, 512)
-    request.app.state.config.SLACK_REDIRECT_URI = _sanitize_text(form_data.SLACK_REDIRECT_URI, 1024)
-    request.app.state.config.SLACK_ACCESS_TOKEN_URL = _sanitize_text(form_data.SLACK_ACCESS_TOKEN_URL, 1024)
-    request.app.state.config.SLACK_AUTHORIZE_URL = _sanitize_text(form_data.SLACK_AUTHORIZE_URL, 1024)
-    request.app.state.config.SLACK_API_BASE_URL = _sanitize_text(form_data.SLACK_API_BASE_URL, 1024)
-    request.app.state.config.SLACK_USERINFO_ENDPOINT = _sanitize_text(form_data.SLACK_USERINFO_ENDPOINT, 1024)
-
-    try:
+    if oauth_changed:
         _reload_oauth_runtime(request)
-    except Exception as e:
-        log.exception('Failed to reload OAuth configuration')
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f'Failed to apply SSO configuration: {e}',
-        )
-    request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS = _sanitize_oauth_provider_list(
-        form_data.OAUTH_ALLOWED_LOGIN_PROVIDERS
-    )
-    request.app.state.config.OAUTH_ALLOWED_SIGNUP_PROVIDERS = _sanitize_oauth_provider_list(
-        form_data.OAUTH_ALLOWED_SIGNUP_PROVIDERS
-    )
-    request.app.state.config.ENABLE_INVITE_ONLY_AUTH = form_data.ENABLE_INVITE_ONLY_AUTH
-
-    request.app.state.config.INVITE_CREATOR_SCOPE = (
-        form_data.INVITE_CREATOR_SCOPE if form_data.INVITE_CREATOR_SCOPE in ['admin', 'groups', 'all'] else 'admin'
-    )
-    request.app.state.config.INVITE_CREATOR_GROUP_IDS = [
-        str(group_id) for group_id in (form_data.INVITE_CREATOR_GROUP_IDS or []) if str(group_id).strip()
-    ]
-    request.app.state.config.INVITE_CREATOR_COOLDOWN_SECONDS = max(
-        0, int(form_data.INVITE_CREATOR_COOLDOWN_SECONDS or 0)
-    )
-    request.app.state.config.INVITE_CODE_LENGTH = max(4, min(32, int(form_data.INVITE_CODE_LENGTH or 8)))
-    request.app.state.config.INVITE_CODE_TTL_SECONDS = max(0, int(form_data.INVITE_CODE_TTL_SECONDS or 0))
-    request.app.state.config.INVITE_CODE_PREFIX = re.sub(r'[^A-Za-z0-9_-]', '', form_data.INVITE_CODE_PREFIX or '')[:24]
-    request.app.state.config.INVITE_CODE_REUSABLE = form_data.INVITE_CODE_REUSABLE
-    request.app.state.config.INVITE_CODE_MAX_USES = max(0, int(form_data.INVITE_CODE_MAX_USES or 0))
-
-    request.app.state.config.ENABLE_API_KEYS = form_data.ENABLE_API_KEYS
-    request.app.state.config.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS = form_data.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS
-    request.app.state.config.API_KEYS_ALLOWED_ENDPOINTS = form_data.API_KEYS_ALLOWED_ENDPOINTS
-
-    request.app.state.config.ENABLE_FOLDERS = form_data.ENABLE_FOLDERS
-    request.app.state.config.FOLDER_MAX_FILE_COUNT = (
-        int(form_data.FOLDER_MAX_FILE_COUNT) if form_data.FOLDER_MAX_FILE_COUNT else ''
-    )
-    request.app.state.config.ENABLE_CHANNELS = form_data.ENABLE_CHANNELS
-    request.app.state.config.ENABLE_MEMORIES = form_data.ENABLE_MEMORIES
-    request.app.state.config.ENABLE_NOTES = form_data.ENABLE_NOTES
-
-    if form_data.DEFAULT_USER_ROLE in ['pending', 'user', 'admin']:
-        request.app.state.config.DEFAULT_USER_ROLE = form_data.DEFAULT_USER_ROLE
-
-    request.app.state.config.DEFAULT_GROUP_ID = form_data.DEFAULT_GROUP_ID
-
-    pattern = r'^(-1|0|(-?\d+(\.\d+)?)(ms|s|m|h|d|w))$'
-
-    # Check if the input string matches the pattern
-    if re.match(pattern, form_data.JWT_EXPIRES_IN):
-        request.app.state.config.JWT_EXPIRES_IN = form_data.JWT_EXPIRES_IN
-
-    request.app.state.config.ENABLE_COMMUNITY_SHARING = form_data.ENABLE_COMMUNITY_SHARING
-    request.app.state.config.ENABLE_MESSAGE_RATING = form_data.ENABLE_MESSAGE_RATING
-
-    request.app.state.config.ENABLE_USER_WEBHOOKS = form_data.ENABLE_USER_WEBHOOKS
-    request.app.state.config.ENABLE_USER_STATUS = form_data.ENABLE_USER_STATUS
-
-    request.app.state.config.ENABLE_SYSTEM_NOTICE = form_data.ENABLE_SYSTEM_NOTICE
-    request.app.state.config.SYSTEM_NOTICE_TITLE = _sanitize_text(form_data.SYSTEM_NOTICE_TITLE, 160)
-    request.app.state.config.SYSTEM_NOTICE_CONTENT = _sanitize_text(form_data.SYSTEM_NOTICE_CONTENT, 10000)
-
-    request.app.state.config.ENABLE_MOTD = form_data.ENABLE_MOTD
-    request.app.state.config.MOTD_TITLE = _sanitize_text(form_data.MOTD_TITLE, 160)
-    request.app.state.config.MOTD_CONTENT = _sanitize_text(form_data.MOTD_CONTENT, 10000)
-    request.app.state.config.NOTIFICATION_SOUND_LIBRARY = _sanitize_notification_sound_library(
-        form_data.NOTIFICATION_SOUND_LIBRARY
-    )
-    request.app.state.config.CUSTOM_EMOJI_LIBRARY = _sanitize_custom_emoji_library(form_data.CUSTOM_EMOJI_LIBRARY)
-
-    request.app.state.config.PENDING_USER_OVERLAY_TITLE = form_data.PENDING_USER_OVERLAY_TITLE
-    request.app.state.config.PENDING_USER_OVERLAY_CONTENT = form_data.PENDING_USER_OVERLAY_CONTENT
-
-    request.app.state.config.RESPONSE_WATERMARK = form_data.RESPONSE_WATERMARK
 
     await _emit_public_config_update(request)
-
     return _serialize_admin_config(request)
 
 
 class LdapServerConfig(BaseModel):
     label: str
     host: str
-    port: Optional[int] = None
+    port: int | None = None
     attribute_for_mail: str = 'mail'
     attribute_for_username: str = 'uid'
     app_dn: str
@@ -1671,9 +1601,9 @@ class LdapServerConfig(BaseModel):
     search_base: str
     search_filters: str = ''
     use_tls: bool = True
-    certificate_path: Optional[str] = None
+    certificate_path: str | None = None
     validate_cert: bool = True
-    ciphers: Optional[str] = 'ALL'
+    ciphers: str | None = 'ALL'
 
 
 @router.get('/admin/config/ldap/server', response_model=LdapServerConfig)
@@ -1707,7 +1637,7 @@ async def update_ldap_server(request: Request, form_data: LdapServerConfig, user
     for key in required_fields:
         value = getattr(form_data, key)
         if not value:
-            raise HTTPException(400, detail=f'Required field {key} is empty')
+            raise HTTPException(400, detail=ERROR_MESSAGES.REQUIRED_FIELD_EMPTY(key))
 
     request.app.state.config.LDAP_SERVER_LABEL = form_data.label
     request.app.state.config.LDAP_SERVER_HOST = form_data.host
@@ -1746,7 +1676,7 @@ async def get_ldap_config(request: Request, user=Depends(get_admin_user)):
 
 
 class LdapConfigForm(BaseModel):
-    enable_ldap: Optional[bool] = None
+    enable_ldap: bool | None = None
 
 
 @router.post('/admin/config/ldap')
@@ -1762,9 +1692,12 @@ async def update_ldap_config(request: Request, form_data: LdapConfigForm, user=D
 
 # create api key
 @router.post('/api_key', response_model=ApiKey)
-async def generate_api_key(request: Request, user=Depends(get_current_user), db: Session = Depends(get_session)):
-    if not request.app.state.config.ENABLE_API_KEYS or not has_permission(
-        user.id, 'features.api_keys', request.app.state.config.USER_PERMISSIONS
+async def generate_api_key(
+    request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_async_session)
+):
+    if not request.app.state.config.ENABLE_API_KEYS or (
+        user.role != 'admin'
+        and not await has_permission(user.id, 'features.api_keys', request.app.state.config.USER_PERMISSIONS)
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1772,7 +1705,7 @@ async def generate_api_key(request: Request, user=Depends(get_current_user), db:
         )
 
     api_key = create_api_key()
-    success = Users.update_user_api_key_by_id(user.id, api_key, db=db)
+    success = await Users.update_user_api_key_by_id(user.id, api_key, db=db)
 
     if success:
         return {
@@ -1784,14 +1717,14 @@ async def generate_api_key(request: Request, user=Depends(get_current_user), db:
 
 # delete api key
 @router.delete('/api_key', response_model=bool)
-async def delete_api_key(user=Depends(get_current_user), db: Session = Depends(get_session)):
-    return Users.delete_user_api_key_by_id(user.id, db=db)
+async def delete_api_key(user=Depends(get_current_user), db: AsyncSession = Depends(get_async_session)):
+    return await Users.delete_user_api_key_by_id(user.id, db=db)
 
 
 # get api key
 @router.get('/api_key', response_model=ApiKey)
-async def get_api_key(user=Depends(get_current_user), db: Session = Depends(get_session)):
-    api_key = Users.get_user_api_key_by_id(user.id, db=db)
+async def get_api_key(user=Depends(get_current_user), db: AsyncSession = Depends(get_async_session)):
+    api_key = await Users.get_user_api_key_by_id(user.id, db=db)
     if api_key:
         return {
             'api_key': api_key,
@@ -1815,7 +1748,7 @@ async def token_exchange(
     response: Response,
     provider: str,
     form_data: TokenExchangeForm,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ):
     """
     Exchange an external OAuth provider token for an OpenWebUI JWT.
@@ -1827,26 +1760,13 @@ async def token_exchange(
             detail='Token exchange is disabled',
         )
 
-    if not request.app.state.config.ENABLE_OAUTH_LOGIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-        )
-
     provider = provider.lower()
-
-    allowed_login_providers = _sanitize_oauth_provider_list(request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS)
-    if isinstance(allowed_login_providers, list) and provider not in allowed_login_providers:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-        )
 
     # Check if provider is configured
     if provider not in OAUTH_PROVIDERS:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Provider '{provider}' is not configured",
+            detail=ERROR_MESSAGES.OAUTH_NOT_CONFIGURED(provider),
         )
     # Get the OAuth client for this provider
     oauth_manager = request.app.state.oauth_manager
@@ -1854,7 +1774,7 @@ async def token_exchange(
     if not client:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"OAuth client for '{provider}' not found",
+            detail=ERROR_MESSAGES.OAUTH_NOT_CONFIGURED(provider),
         )
 
     # Validate the token by calling the userinfo endpoint
@@ -1896,15 +1816,26 @@ async def token_exchange(
         )
     email = email.lower()
 
+    # Enforce domain allowlist — same check as the normal OAuth callback
+    if (
+        '*' not in auth_manager_config.OAUTH_ALLOWED_DOMAINS
+        and email.split('@')[-1] not in auth_manager_config.OAUTH_ALLOWED_DOMAINS
+    ):
+        log.warning(f'Token exchange denied: email domain not in allowed domains list')
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
     # Try to find the user by OAuth sub
-    user = Users.get_user_by_oauth_sub(provider, sub, db=db)
+    user = await Users.get_user_by_oauth_sub(provider, sub, db=db)
 
     if not user and OAUTH_MERGE_ACCOUNTS_BY_EMAIL.value:
         # Try to find by email if merge is enabled
-        user = Users.get_user_by_email(email, db=db)
+        user = await Users.get_user_by_email(email, db=db)
         if user:
             # Link the OAuth sub to this user
-            Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
+            await Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
 
     if not user:
         raise HTTPException(
@@ -1912,4 +1843,4 @@ async def token_exchange(
             detail='User not found. Please sign in via the web interface first.',
         )
 
-    return create_session_response(request, user, db)
+    return await create_session_response(request, user, db)

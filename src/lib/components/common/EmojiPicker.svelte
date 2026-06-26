@@ -1860,7 +1860,7 @@
 
 	<DropdownMenu.Portal>
 		<DropdownMenu.Content
-			class="max-w-full w-[22rem] border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850 rounded-3xl z-9999 shadow-lg dark:text-white"
+			class="max-w-full w-[22rem] border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-850 rounded-3xl z-[10050] shadow-lg dark:text-white"
 			sideOffset={8}
 			{side}
 			{align}

@@ -3,6 +3,7 @@
 	import { getOllamaVersion } from '$lib/apis/ollama';
 	import {
 		WEBUI_BUILD_HASH,
+		AWESOME_WEBUI_VERSION,
 		WEBUI_GITHUB_REPO,
 		WEBUI_GITHUB_URL,
 		WEBUI_RELEASES_URL,
@@ -61,10 +62,12 @@
 			</div>
 			<div class="flex w-full justify-between items-center">
 				<div class="flex flex-col text-xs text-gray-700 dark:text-gray-200">
-					<div class="flex gap-1">
-						<Tooltip content={WEBUI_BUILD_HASH}>
-							v{WEBUI_VERSION}
-						</Tooltip>
+								<div class="flex gap-1">
+									<span class="font-medium">Awesome WebUI v{AWESOME_WEBUI_VERSION}</span>
+									<span class="text-gray-400 dark:text-gray-600">/</span>
+									<Tooltip content={WEBUI_BUILD_HASH}>
+										Open WebUI v{WEBUI_VERSION}
+									</Tooltip>
 
 						{#if $config?.features?.enable_version_update_check}
 							<a href={`${WEBUI_RELEASES_URL}/tag/v${version.latest}`} target="_blank">

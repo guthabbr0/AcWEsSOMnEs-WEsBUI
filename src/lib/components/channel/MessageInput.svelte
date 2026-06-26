@@ -388,6 +388,7 @@
 	export let showCommands = false;
 	$: showCommands = ['/'].includes(command?.charAt(0));
 	let suggestions = null;
+	let toolbarEmojiPickerOpen = false;
 
 	const screenCaptureHandler = async () => {
 		try {
@@ -667,6 +668,7 @@
 				: []),
 			{
 				char: ':',
+				allow: (props) => String(props?.query ?? '').length > 0,
 				render: getSuggestionRenderer(EmojiSuggestionList, {
 					i18n,
 					insertTextHandler: insertTextAtCursor
@@ -1075,6 +1077,7 @@
 									</slot>
 
 									<EmojiPicker
+										bind:show={toolbarEmojiPickerOpen}
 										onSubmit={async (name) => {
 											if (chatInputElement?.insertEmojiByShortCode) {
 												chatInputElement.insertEmojiByShortCode(name);
@@ -1091,6 +1094,9 @@
 												class="bg-transparent hover:bg-white/80 text-gray-800 dark:text-white dark:hover:bg-gray-800 transition rounded-full p-1.5 outline-hidden focus:outline-hidden"
 												type="button"
 												aria-label={$i18n.t('Insert emoji')}
+												on:click={() => {
+													toolbarEmojiPickerOpen = true;
+												}}
 											>
 												<FaceSmile />
 											</button>

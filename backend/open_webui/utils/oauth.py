@@ -1,100 +1,92 @@
 import base64
 import copy
+import fnmatch
 import hashlib
+import json
 import logging
 import mimetypes
+import re
+import secrets
 import sys
+import time
 import urllib
 import uuid
-import json
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-
-import re
-import fnmatch
-import time
-import secrets
-from cryptography.fernet import Fernet
-from typing import Literal
+from typing import Literal, Optional
 
 import aiohttp
 from authlib.integrations.starlette_client import OAuth
+from authlib.jose.errors import BadSignatureError
+from authlib.oauth2.rfc6749.errors import OAuth2Error
 from authlib.oidc.core import UserInfo
+from cryptography.fernet import Fernet
 from fastapi import (
     HTTPException,
     status,
 )
-from starlette.responses import RedirectResponse
-from typing import Optional
-
-
-from open_webui.models.auths import Auths
-from open_webui.models.oauth_sessions import OAuthSessions
-from open_webui.models.users import Users
-
-
-from open_webui.models.groups import Groups, GroupModel, GroupUpdateForm, GroupForm
+from mcp.shared.auth import (
+    OAuthClientMetadata as MCPOAuthClientMetadata,
+)
+from mcp.shared.auth import (
+    OAuthMetadata,
+)
 from open_webui.config import (
     DEFAULT_USER_ROLE,
-    ENABLE_OAUTH_LOGIN,
-    ENABLE_OAUTH_SIGNUP,
-    OAUTH_ALLOWED_LOGIN_PROVIDERS,
-    OAUTH_ALLOWED_SIGNUP_PROVIDERS,
-    OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE,
-    OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
-    OAUTH_PROVIDERS,
-    ENABLE_OAUTH_ROLE_MANAGEMENT,
-    ENABLE_OAUTH_GROUP_MANAGEMENT,
     ENABLE_OAUTH_GROUP_CREATION,
-    OAUTH_GROUP_DEFAULT_SHARE,
-    OAUTH_BLOCKED_GROUPS,
-    OAUTH_GROUPS_SEPARATOR,
-    OAUTH_ROLES_SEPARATOR,
-    OAUTH_ROLES_CLAIM,
-    OAUTH_SUB_CLAIM,
-    OAUTH_GROUPS_CLAIM,
-    OAUTH_EMAIL_CLAIM,
-    OAUTH_PICTURE_CLAIM,
-    OAUTH_USERNAME_CLAIM,
-    OAUTH_ALLOWED_ROLES,
+    ENABLE_OAUTH_GROUP_MANAGEMENT,
+    ENABLE_OAUTH_ROLE_MANAGEMENT,
+    ENABLE_OAUTH_SIGNUP,
+    JWT_EXPIRES_IN,
+    OAUTH_ACCESS_TOKEN_REQUEST_INCLUDE_CLIENT_ID,
     OAUTH_ADMIN_ROLES,
     OAUTH_ALLOWED_DOMAINS,
-    OAUTH_UPDATE_PICTURE_ON_LOGIN,
-    OAUTH_UPDATE_NAME_ON_LOGIN,
-    OAUTH_UPDATE_EMAIL_ON_LOGIN,
-    OAUTH_ACCESS_TOKEN_REQUEST_INCLUDE_CLIENT_ID,
+    OAUTH_ALLOWED_ROLES,
     OAUTH_AUDIENCE,
+    OAUTH_AUTHORIZE_PARAMS,
+    OAUTH_BLOCKED_GROUPS,
+    OAUTH_CLIENT_TIMEOUT,
+    OAUTH_EMAIL_CLAIM,
+    OAUTH_GROUP_DEFAULT_SHARE,
+    OAUTH_GROUPS_CLAIM,
+    OAUTH_GROUPS_SEPARATOR,
+    OAUTH_MERGE_ACCOUNTS_BY_EMAIL,
+    OAUTH_PICTURE_CLAIM,
+    OAUTH_PROVIDERS,
+    OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE,
+    OAUTH_ROLES_CLAIM,
+    OAUTH_ROLES_SEPARATOR,
+    OAUTH_SUB_CLAIM,
+    OAUTH_UPDATE_EMAIL_ON_LOGIN,
+    OAUTH_UPDATE_NAME_ON_LOGIN,
+    OAUTH_UPDATE_PICTURE_ON_LOGIN,
+    OAUTH_USERNAME_CLAIM,
     WEBHOOK_URL,
-    JWT_EXPIRES_IN,
     AppConfig,
 )
 from open_webui.constants import ERROR_MESSAGES, WEBHOOK_MESSAGES
 from open_webui.env import (
+    AIOHTTP_CLIENT_ALLOW_REDIRECTS,
     AIOHTTP_CLIENT_SESSION_SSL,
-    WEBUI_NAME,
-    WEBUI_AUTH_COOKIE_SAME_SITE,
-    WEBUI_AUTH_COOKIE_SECURE,
-    ENABLE_OAUTH_ID_TOKEN_COOKIE,
     ENABLE_OAUTH_EMAIL_FALLBACK,
+    ENABLE_OAUTH_ID_TOKEN_COOKIE,
     OAUTH_CLIENT_INFO_ENCRYPTION_KEY,
     OAUTH_MAX_SESSIONS_PER_USER,
+    REDIS_KEY_PREFIX,
+    WEBUI_AUTH_COOKIE_SAME_SITE,
+    WEBUI_AUTH_COOKIE_SECURE,
+    WEBUI_NAME,
 )
-from open_webui.utils.misc import parse_duration
-from open_webui.utils.auth import (
-    get_password_hash,
-    create_token,
-    decode_token,
-    get_http_authorization_cred,
-)
-from open_webui.utils.webhook import post_webhook
+from open_webui.models.auths import Auths
+from open_webui.models.groups import GroupForm, GroupModel, Groups, GroupUpdateForm
+from open_webui.models.oauth_sessions import OAuthSessions
+from open_webui.models.users import Users
+from open_webui.retrieval.web.utils import validate_url
+from open_webui.utils.auth import create_token, get_password_hash
 from open_webui.utils.groups import apply_default_group_assignment
-from open_webui.utils.invites import consume_invite_code
-
-from mcp.shared.auth import (
-    OAuthClientMetadata as MCPOAuthClientMetadata,
-    OAuthMetadata,
-)
-
-from authlib.oauth2.rfc6749.errors import OAuth2Error
+from open_webui.utils.misc import parse_duration
+from open_webui.utils.webhook import post_webhook
+from starlette.responses import RedirectResponse
 
 
 class OAuthClientMetadata(MCPOAuthClientMetadata):
@@ -104,6 +96,7 @@ class OAuthClientMetadata(MCPOAuthClientMetadata):
 
 class OAuthClientInformationFull(OAuthClientMetadata):
     issuer: Optional[str] = None  # URL of the OAuth server that issued this client
+    resource: Optional[str] = None  # RFC 8707 resource indicator for JWT audience
 
     client_id: str
     client_secret: str | None = None
@@ -120,10 +113,7 @@ log = logging.getLogger(__name__)
 
 auth_manager_config = AppConfig()
 auth_manager_config.DEFAULT_USER_ROLE = DEFAULT_USER_ROLE
-auth_manager_config.ENABLE_OAUTH_LOGIN = ENABLE_OAUTH_LOGIN
 auth_manager_config.ENABLE_OAUTH_SIGNUP = ENABLE_OAUTH_SIGNUP
-auth_manager_config.OAUTH_ALLOWED_LOGIN_PROVIDERS = OAUTH_ALLOWED_LOGIN_PROVIDERS
-auth_manager_config.OAUTH_ALLOWED_SIGNUP_PROVIDERS = OAUTH_ALLOWED_SIGNUP_PROVIDERS
 auth_manager_config.OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE = OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE
 auth_manager_config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL = OAUTH_MERGE_ACCOUNTS_BY_EMAIL
 auth_manager_config.ENABLE_OAUTH_ROLE_MANAGEMENT = ENABLE_OAUTH_ROLE_MANAGEMENT
@@ -146,6 +136,41 @@ auth_manager_config.OAUTH_UPDATE_PICTURE_ON_LOGIN = OAUTH_UPDATE_PICTURE_ON_LOGI
 auth_manager_config.OAUTH_UPDATE_NAME_ON_LOGIN = OAUTH_UPDATE_NAME_ON_LOGIN
 auth_manager_config.OAUTH_UPDATE_EMAIL_ON_LOGIN = OAUTH_UPDATE_EMAIL_ON_LOGIN
 auth_manager_config.OAUTH_AUDIENCE = OAUTH_AUDIENCE
+
+
+# Conservative default when the provider omits both expires_in and expires_at.
+# Matches the value recommended by Authlib's compliance_fix documentation.
+DEFAULT_TOKEN_EXPIRY_SECONDS = 3600
+
+
+def _normalize_token_expiry(token: dict) -> dict:
+    """Ensure a token dict always has a numeric ``expires_at``.
+
+    Resolution order:
+    1. If *expires_at* is already present and non-None, trust it.
+    2. Else if *expires_in* is present and non-None, compute *expires_at*.
+    3. Otherwise fall back to ``DEFAULT_TOKEN_EXPIRY_SECONDS`` and log a
+       warning so operators can identify providers that omit expiration.
+
+    Also stamps *issued_at* for auditing.
+    """
+    token['issued_at'] = datetime.now().timestamp()
+
+    if token.get('expires_at') is not None:
+        token['expires_at'] = int(token['expires_at'])
+        return token
+
+    if token.get('expires_in') is not None:
+        token['expires_at'] = int(datetime.now().timestamp() + token['expires_in'])
+        return token
+
+    # Neither field present — conservative fallback
+    log.warning(
+        "OAuth token response missing both 'expires_in' and 'expires_at'; "
+        f'defaulting to {DEFAULT_TOKEN_EXPIRY_SECONDS}s from now'
+    )
+    token['expires_at'] = int(datetime.now().timestamp() + DEFAULT_TOKEN_EXPIRY_SECONDS)
+    return token
 
 
 FERNET = None
@@ -182,61 +207,6 @@ def decrypt_data(data: str):
     except Exception as e:
         log.error(f'Error decrypting data: {e}')
         raise
-
-
-def _resolve_allowed_providers(allowed_providers) -> list[str]:
-    configured_providers = list(OAUTH_PROVIDERS.keys())
-    if not isinstance(allowed_providers, list):
-        return configured_providers
-
-    normalized = []
-    for provider in allowed_providers:
-        provider_name = str(provider).strip().lower()
-        if not provider_name or provider_name not in configured_providers:
-            continue
-        if provider_name not in normalized:
-            normalized.append(provider_name)
-    return normalized
-
-
-def _sanitize_internal_redirect_path(path: str, default: str = '/') -> str:
-    redirect_path = str(path or '').strip()
-    if not redirect_path.startswith('/'):
-        return default
-    if redirect_path.startswith('//'):
-        return default
-    if len(redirect_path) > 2048:
-        return default
-    return redirect_path
-
-
-def _append_query_params(url: str, params: dict[str, str]) -> str:
-    parsed = urllib.parse.urlparse(url)
-    query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
-    for key, value in params.items():
-        if value is None:
-            continue
-        query[key] = value
-    new_query = urllib.parse.urlencode(query)
-    return urllib.parse.urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
-            new_query,
-            parsed.fragment,
-        )
-    )
-
-
-def _get_request_token(request) -> Optional[str]:
-    auth_header = request.headers.get('Authorization')
-    if auth_header:
-        auth_cred = get_http_authorization_cred(auth_header)
-        if auth_cred:
-            return auth_cred.credentials
-    return request.cookies.get('token')
 
 
 def _build_oauth_callback_error_message(e: Exception) -> str:
@@ -317,12 +287,36 @@ def get_parsed_and_base_url(server_url) -> tuple[urllib.parse.ParseResult, str]:
     return parsed, base_url
 
 
-async def get_authorization_server_discovery_urls(server_url: str) -> list[str]:
-    """
-    https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization
-    """
+@dataclass
+class ProtectedResourceMetadata:
+    """RFC 9728 Protected Resource Metadata fields relevant to OAuth flows."""
 
+    resource: str | None = None
+    authorization_servers: list[str] = field(default_factory=list)
+    scopes_supported: list[str] = field(default_factory=list)
+
+    def get_discovery_urls(self, server_url: str) -> list[str]:
+        """Build all candidate OAuth discovery URLs from this metadata and the server URL."""
+        urls = []
+        for auth_server in self.authorization_servers:
+            urls.extend(_build_well_known_urls(auth_server.rstrip('/')))
+        urls.extend(_build_well_known_urls(server_url))
+        return urls
+
+
+async def get_protected_resource_metadata(server_url: str) -> ProtectedResourceMetadata:
+    """
+    Fetch RFC 9728 Protected Resource Metadata from an MCP server.
+
+    https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization
+
+    Returns:
+        ProtectedResourceMetadata with the resource indicator (RFC 8707)
+        and authorization server URLs discovered from the metadata document.
+    """
     authorization_servers = []
+    resource = None
+    scopes = []
     try:
         async with aiohttp.ClientSession(trust_env=True) as session:
             async with session.post(
@@ -332,57 +326,72 @@ async def get_authorization_server_discovery_urls(server_url: str) -> list[str]:
                 ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as response:
                 if response.status == 401:
+                    resource_metadata_urls = []
                     match = re.search(
-                        r'resource_metadata="([^"]+)"',
+                        r'resource_metadata=(?:"([^"]+)"|([^\s,]+))',
                         response.headers.get('WWW-Authenticate', ''),
                     )
                     if match:
-                        resource_metadata_url = match.group(1)
-                        log.debug(f'Found resource_metadata URL: {resource_metadata_url}')
+                        resource_metadata_urls = [match.group(1) or match.group(2)]
+                        log.debug(f'Found resource_metadata URL: {resource_metadata_urls[0]}')
+                    else:
+                        # Fall back to well-known resource metadata URIs (RFC 9728 §4.2)
+                        parsed, base_url = get_parsed_and_base_url(server_url)
+                        if parsed.path and parsed.path != '/':
+                            path = parsed.path.rstrip('/')
+                            resource_metadata_urls.append(
+                                urllib.parse.urljoin(base_url, f'/.well-known/oauth-protected-resource{path}')
+                            )
+                        resource_metadata_urls.append(
+                            urllib.parse.urljoin(base_url, '/.well-known/oauth-protected-resource')
+                        )
+                        log.debug(f'No resource_metadata in header, trying well-known URIs: {resource_metadata_urls}')
 
-                        # Step 2: Fetch Protected Resource metadata
-                        async with session.get(
-                            resource_metadata_url, ssl=AIOHTTP_CLIENT_SESSION_SSL
-                        ) as resource_response:
-                            if resource_response.status == 200:
-                                resource_metadata = await resource_response.json()
+                    # Fetch Protected Resource metadata from candidate URLs
+                    for resource_metadata_url in resource_metadata_urls:
+                        try:
+                            async with session.get(
+                                resource_metadata_url, ssl=AIOHTTP_CLIENT_SESSION_SSL
+                            ) as resource_response:
+                                if resource_response.status == 200:
+                                    resource_metadata = await resource_response.json()
 
-                                # Step 3: Extract authorization_servers
-                                servers = resource_metadata.get('authorization_servers', [])
-                                if servers:
-                                    authorization_servers = servers
-                                    log.debug(f'Discovered authorization servers: {servers}')
+                                    resource = resource_metadata.get('resource') or None
+                                    if resource:
+                                        log.debug(f'Discovered resource indicator: {resource}')
+
+                                    servers = resource_metadata.get('authorization_servers', [])
+                                    scopes = resource_metadata.get('scopes_supported', [])
+                                    if scopes:
+                                        log.debug(f'Discovered resource scopes: {scopes}')
+
+                                    if servers:
+                                        authorization_servers = servers
+                                        log.debug(f'Discovered authorization servers: {servers}')
+                                        break
+                        except Exception as e:
+                            log.debug(f'Failed to fetch resource metadata from {resource_metadata_url}: {e}')
+                            continue
     except Exception as e:
         log.debug(f'MCP Protected Resource discovery failed: {e}')
 
-    discovery_urls = []
-    for auth_server in authorization_servers:
-        auth_server = auth_server.rstrip('/')
-        discovery_urls.extend(
-            [
-                f'{auth_server}/.well-known/oauth-authorization-server',
-                f'{auth_server}/.well-known/openid-configuration',
-            ]
-        )
-
-    return discovery_urls
+    return ProtectedResourceMetadata(
+        resource=resource, authorization_servers=authorization_servers, scopes_supported=scopes
+    )
 
 
-async def get_discovery_urls(server_url) -> list[str]:
-    urls = await get_authorization_server_discovery_urls(server_url)
+def _build_well_known_urls(server_url: str) -> list[str]:
+    """Build RFC 8414 / OIDC Discovery well-known URLs for a server URL."""
     parsed, base_url = get_parsed_and_base_url(server_url)
+    urls = []
 
     if parsed.path and parsed.path != '/':
-        # Generate discovery URLs based on https://modelcontextprotocol.io/specification/draft/basic/authorization#authorization-server-metadata-discovery
-        tenant = parsed.path.rstrip('/')
+        path = parsed.path.rstrip('/')
         urls.extend(
             [
-                urllib.parse.urljoin(
-                    base_url,
-                    f'/.well-known/oauth-authorization-server{tenant}',
-                ),
-                urllib.parse.urljoin(base_url, f'/.well-known/openid-configuration{tenant}'),
-                urllib.parse.urljoin(base_url, f'{tenant}/.well-known/openid-configuration'),
+                urllib.parse.urljoin(base_url, f'/.well-known/oauth-authorization-server{path}'),
+                urllib.parse.urljoin(base_url, f'/.well-known/openid-configuration{path}'),
+                urllib.parse.urljoin(base_url, f'{path}/.well-known/openid-configuration'),
             ]
         )
 
@@ -394,6 +403,12 @@ async def get_discovery_urls(server_url) -> list[str]:
     )
 
     return urls
+
+
+async def get_discovery_urls(server_url) -> list[str]:
+    """Convenience: get all OAuth discovery URLs for a server URL."""
+    metadata = await get_protected_resource_metadata(server_url)
+    return metadata.get_discovery_urls(server_url)
 
 
 # TODO: Some OAuth providers require Initial Access Tokens (IATs) for dynamic client registration.
@@ -411,14 +426,16 @@ async def get_oauth_client_info_with_dynamic_client_registration(
         redirect_base_url = (str(request.app.state.config.WEBUI_URL or request.base_url)).rstrip('/')
 
         oauth_client_metadata = OAuthClientMetadata(
-            client_name='Awesome WebUI',
+            client_name='Open WebUI',
             redirect_uris=[f'{redirect_base_url}/oauth/clients/{client_id}/callback'],
             grant_types=['authorization_code', 'refresh_token'],
             response_types=['code'],
         )
 
         # Attempt to fetch OAuth server metadata to get registration endpoint & scopes
-        discovery_urls = await get_discovery_urls(oauth_server_url)
+        resource_metadata = await get_protected_resource_metadata(oauth_server_url)
+        resource = resource_metadata.resource
+        discovery_urls = resource_metadata.get_discovery_urls(oauth_server_url)
         for url in discovery_urls:
             async with aiohttp.ClientSession(trust_env=True) as session:
                 async with session.get(url, ssl=AIOHTTP_CLIENT_SESSION_SSL) as oauth_server_metadata_response:
@@ -478,8 +495,9 @@ async def get_oauth_client_info_with_dynamic_client_registration(
                     oauth_client_info = OAuthClientInformationFull.model_validate(
                         {
                             **registration_response_json,
-                            **{'issuer': oauth_server_metadata_url},
-                            **{'server_metadata': oauth_server_metadata},
+                            'issuer': oauth_server_metadata_url,
+                            'server_metadata': oauth_server_metadata,
+                            'resource': resource,
                         }
                     )
                     log.info(
@@ -513,49 +531,89 @@ async def get_oauth_client_info_with_static_credentials(
     client_id: str,
     oauth_server_url: str,
     oauth_client_id: str,
-    oauth_client_secret: Optional[str] = None,
+    oauth_client_secret: str,
 ) -> OAuthClientInformationFull:
+    """
+    Build an OAuthClientInformationFull from user-provided static credentials.
+    Performs server metadata discovery to resolve authorization/token endpoints,
+    but skips dynamic client registration entirely.
+    """
     try:
         oauth_server_metadata = None
         oauth_server_metadata_url = None
 
         redirect_base_url = (str(request.app.state.config.WEBUI_URL or request.base_url)).rstrip('/')
+        redirect_uri = f'{redirect_base_url}/oauth/clients/{client_id}/callback'
 
-        discovery_urls = await get_discovery_urls(oauth_server_url)
+        # Discover server metadata (authorization endpoint, token endpoint, scopes, etc.)
+        resource_metadata = await get_protected_resource_metadata(oauth_server_url)
+        resource = resource_metadata.resource
+        discovery_urls = resource_metadata.get_discovery_urls(oauth_server_url)
         for url in discovery_urls:
             async with aiohttp.ClientSession(trust_env=True) as session:
-                async with session.get(url, ssl=AIOHTTP_CLIENT_SESSION_SSL) as oauth_server_metadata_response:
-                    if oauth_server_metadata_response.status != 200:
-                        continue
+                async with session.get(url, ssl=AIOHTTP_CLIENT_SESSION_SSL) as resp:
+                    if resp.status == 200:
+                        try:
+                            oauth_server_metadata = OAuthMetadata.model_validate(await resp.json())
+                            oauth_server_metadata_url = url
+                            break
+                        except Exception as e:
+                            log.error(f'Error parsing OAuth metadata from {url}: {e}')
+                            continue
 
-                    try:
-                        oauth_server_metadata = OAuthMetadata.model_validate(
-                            await oauth_server_metadata_response.json()
-                        )
-                        oauth_server_metadata_url = url
-                        break
-                    except Exception as e:
-                        log.error(f'Error parsing OAuth metadata from {url}: {e}')
-                        continue
+        # Use scopes from the Protected Resource Metadata (RFC 9728) if available.
+        # Unlike the Authorization Server's scopes_supported (which is a full catalog
+        # of every scope the server can grant), the PRM scopes_supported represents
+        # what this specific resource requires — making it safe to request them all.
+        scope = ' '.join(resource_metadata.scopes_supported) if resource_metadata.scopes_supported else None
 
-        oauth_client_info = OAuthClientInformationFull.model_validate(
-            {
-                'client_id': oauth_client_id,
-                'client_secret': oauth_client_secret,
-                'client_name': 'Awesome WebUI',
-                'redirect_uris': [f'{redirect_base_url}/oauth/clients/{client_id}/callback'],
-                'grant_types': ['authorization_code', 'refresh_token'],
-                'response_types': ['code'],
-                'issuer': oauth_server_metadata_url,
-                'server_metadata': oauth_server_metadata,
-            }
+        # Determine token_endpoint_auth_method
+        token_endpoint_auth_method = 'client_secret_post'
+        if (
+            oauth_server_metadata
+            and oauth_server_metadata.token_endpoint_auth_methods_supported
+            and token_endpoint_auth_method not in oauth_server_metadata.token_endpoint_auth_methods_supported
+        ):
+            token_endpoint_auth_method = oauth_server_metadata.token_endpoint_auth_methods_supported[0]
+
+        oauth_client_info = OAuthClientInformationFull(
+            client_id=oauth_client_id,
+            client_secret=oauth_client_secret,
+            redirect_uris=[redirect_uri],
+            grant_types=['authorization_code', 'refresh_token'],
+            response_types=['code'],
+            scope=scope,
+            token_endpoint_auth_method=token_endpoint_auth_method,
+            issuer=oauth_server_metadata_url,
+            server_metadata=oauth_server_metadata,
+            resource=resource,
         )
 
-        log.info(f'Static OAuth client configuration prepared for {oauth_server_url}, client_id: {oauth_client_id}')
+        log.info(
+            f'Static OAuth client info built for {oauth_client_id} using metadata from {oauth_server_metadata_url}'
+        )
         return oauth_client_info
     except Exception as e:
-        log.error(f'Exception during static OAuth client configuration: {e}')
+        log.error(f'Exception building static OAuth client info: {e}')
         raise e
+
+
+def resolve_oauth_client_info(connection: dict) -> dict:
+    """
+    Decrypt OAuth client info from a tool server connection config.
+
+    For oauth_2.1_static, overlays admin-provided credentials from
+    info.oauth_client_id and info.oauth_client_secret onto the blob.
+    """
+    info = connection.get('info', {})
+    data = decrypt_data(info.get('oauth_client_info', ''))
+
+    if connection.get('auth_type') == 'oauth_2.1_static':
+        if info.get('oauth_client_id') and info.get('oauth_client_secret'):
+            data['client_id'] = info['oauth_client_id']
+            data['client_secret'] = info['oauth_client_secret']
+
+    return data
 
 
 class OAuthClientManager:
@@ -570,6 +628,8 @@ class OAuthClientManager:
             'client_id': oauth_client_info.client_id,
             'client_secret': oauth_client_info.client_secret,
             'client_kwargs': {
+                'follow_redirects': True,
+                **({'timeout': int(OAUTH_CLIENT_TIMEOUT.value)} if OAUTH_CLIENT_TIMEOUT.value else {}),
                 **({'scope': oauth_client_info.scope} if oauth_client_info.scope else {}),
                 **(
                     {'token_endpoint_auth_method': oauth_client_info.token_endpoint_auth_method}
@@ -580,15 +640,20 @@ class OAuthClientManager:
             'server_metadata_url': (oauth_client_info.issuer if oauth_client_info.issuer else None),
         }
 
-        if oauth_client_info.server_metadata and oauth_client_info.server_metadata.code_challenge_methods_supported:
-            if (
-                isinstance(
-                    oauth_client_info.server_metadata.code_challenge_methods_supported,
-                    list,
-                )
-                and 'S256' in oauth_client_info.server_metadata.code_challenge_methods_supported
-            ):
-                kwargs['code_challenge_method'] = 'S256'
+        # Default to S256 for OAuth 2.1 (PKCE is mandatory per RFC 9700)
+        kwargs['code_challenge_method'] = 'S256'
+
+        # Only remove PKCE if metadata explicitly excludes S256
+        if (
+            oauth_client_info.server_metadata
+            and oauth_client_info.server_metadata.code_challenge_methods_supported
+            and isinstance(
+                oauth_client_info.server_metadata.code_challenge_methods_supported,
+                list,
+            )
+            and 'S256' not in oauth_client_info.server_metadata.code_challenge_methods_supported
+        ):
+            del kwargs['code_challenge_method']
 
         self.clients[client_id] = {
             'client': self.oauth.register(**kwargs),
@@ -612,7 +677,7 @@ class OAuthClientManager:
         for connection in connections or []:
             if connection.get('type', 'openapi') != 'mcp':
                 continue
-            if connection.get('auth_type', 'none') != 'oauth_2.1':
+            if connection.get('auth_type', 'none') not in ('oauth_2.1', 'oauth_2.1_static'):
                 continue
 
             server_id = connection.get('info', {}).get('id')
@@ -628,7 +693,7 @@ class OAuthClientManager:
                 continue
 
             try:
-                oauth_client_info = decrypt_data(oauth_client_info)
+                oauth_client_info = resolve_oauth_client_info(connection)
                 return self.add_client(expected_client_id, OAuthClientInformationFull(**oauth_client_info))['client']
             except Exception as e:
                 log.error(f'Failed to lazily add OAuth client {expected_client_id} from config: {e}')
@@ -677,7 +742,7 @@ class OAuthClientManager:
             async with aiohttp.ClientSession(trust_env=True) as session:
                 async with session.get(
                     authorization_url,
-                    allow_redirects=False,
+                    allow_redirects=AIOHTTP_CLIENT_ALLOW_REDIRECTS,
                     ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as resp:
                     if resp.status < 400:
@@ -693,7 +758,7 @@ class OAuthClientManager:
                             payload = json.loads(response_text)
                             error = payload.get('error')
                             error_description = payload.get('error_description', '')
-                        except:
+                        except Exception:
                             pass
                     else:
                         error_description = response_text
@@ -746,12 +811,16 @@ class OAuthClientManager:
         """
         try:
             # Get the OAuth session
-            session = OAuthSessions.get_session_by_provider_and_user_id(client_id, user_id)
+            session = await OAuthSessions.get_session_by_provider_and_user_id(client_id, user_id)
             if not session:
                 log.warning(f'No OAuth session found for user {user_id}, client_id {client_id}')
                 return None
 
-            if force_refresh or datetime.now() + timedelta(minutes=5) >= datetime.fromtimestamp(session.expires_at):
+            if (
+                force_refresh
+                or session.expires_at is None
+                or datetime.now() + timedelta(minutes=5) >= datetime.fromtimestamp(session.expires_at)
+            ):
                 log.debug(f'Token refresh needed for user {user_id}, client_id {session.provider}')
                 refreshed_token = await self._refresh_token(session)
                 if refreshed_token:
@@ -760,7 +829,7 @@ class OAuthClientManager:
                     log.warning(
                         f'Token refresh failed for user {user_id}, client_id {session.provider}, deleting session {session.id}'
                     )
-                    OAuthSessions.delete_session_by_id(session.id)
+                    await OAuthSessions.delete_session_by_id(session.id)
                     return None
             return session.token
 
@@ -784,7 +853,7 @@ class OAuthClientManager:
 
             if refreshed_token:
                 # Update the session with new token data
-                session = OAuthSessions.update_session_by_id(session.id, refreshed_token)
+                session = await OAuthSessions.update_session_by_id(session.id, refreshed_token)
                 log.info(f'Successfully refreshed token for session {session.id}')
                 return session.token
             else:
@@ -836,8 +905,15 @@ class OAuthClientManager:
                 'refresh_token': token_data['refresh_token'],
                 'client_id': client.client_id,
             }
+            # RFC 8707: include resource indicator so refreshed tokens retain correct audience
+            client_info = self.get_client_info(client_id)
+            if client_info and client_info.resource:
+                refresh_data['resource'] = client_info.resource
+
             if hasattr(client, 'client_secret') and client.client_secret:
                 refresh_data['client_secret'] = client.client_secret
+
+            # Add scope if available in client kwargs (some providers require it on refresh)
             if (
                 hasattr(client, 'client_kwargs')
                 and client.client_kwargs.get('scope')
@@ -860,14 +936,7 @@ class OAuthClientManager:
                         if 'refresh_token' not in new_token_data:
                             new_token_data['refresh_token'] = token_data['refresh_token']
 
-                        # Add timestamp for tracking
-                        new_token_data['issued_at'] = datetime.now().timestamp()
-
-                        # Calculate expires_at if we have expires_in
-                        if 'expires_in' in new_token_data and 'expires_at' not in new_token_data:
-                            new_token_data['expires_at'] = int(
-                                datetime.now().timestamp() + new_token_data['expires_in']
-                            )
+                        _normalize_token_expiry(new_token_data)
 
                         log.debug(f'Token refresh successful for client_id {client_id}')
                         return new_token_data
@@ -893,7 +962,11 @@ class OAuthClientManager:
 
         redirect_uri = client_info.redirect_uris[0] if client_info.redirect_uris else None
         redirect_uri_str = str(redirect_uri) if redirect_uri else None
-        return await client.authorize_redirect(request, redirect_uri_str)
+        # RFC 8707: pass resource indicator so the IdP sets the correct JWT audience
+        kwargs = {}
+        if client_info.resource:
+            kwargs['resource'] = client_info.resource
+        return await client.authorize_redirect(request, redirect_uri_str, **kwargs)
 
     async def handle_callback(self, request, client_id: str, user_id: str, response):
         client = self.get_client(client_id) or self.ensure_client_from_config(client_id)
@@ -908,7 +981,11 @@ class OAuthClientManager:
             # The Authlib client already has these configured during add_client().
             # Passing them again causes Authlib to concatenate them (e.g., "ID1,ID1"),
             # which results in 401 errors from the token endpoint. (Fix for #19823)
-            token = await client.authorize_access_token(request)
+            # RFC 8707: pass resource indicator for correct JWT audience on token exchange
+            token_kwargs = {}
+            if client_info and client_info.resource:
+                token_kwargs['resource'] = client_info.resource
+            token = await client.authorize_access_token(request, **token_kwargs)
 
             # Validate that we received a proper token response
             # If token exchange failed (e.g., 401), we may get an error response instead
@@ -920,20 +997,15 @@ class OAuthClientManager:
 
             if token:
                 try:
-                    # Add timestamp for tracking
-                    token['issued_at'] = datetime.now().timestamp()
-
-                    # Calculate expires_at if we have expires_in
-                    if 'expires_in' in token and 'expires_at' not in token:
-                        token['expires_at'] = datetime.now().timestamp() + token['expires_in']
+                    _normalize_token_expiry(token)
 
                     # Clean up any existing sessions for this user/client_id first
-                    sessions = OAuthSessions.get_sessions_by_user_id(user_id)
+                    sessions = await OAuthSessions.get_sessions_by_user_id(user_id)
                     for session in sessions:
                         if session.provider == client_id:
-                            OAuthSessions.delete_session_by_id(session.id)
+                            await OAuthSessions.delete_session_by_id(session.id)
 
-                    session = OAuthSessions.create_session(
+                    session = await OAuthSessions.create_session(
                         user_id=user_id,
                         provider=client_id,
                         token=token,
@@ -1007,12 +1079,28 @@ class OAuthManager:
         """
         try:
             # Get the OAuth session
-            session = OAuthSessions.get_session_by_id_and_user_id(session_id, user_id)
+            session = await OAuthSessions.get_session_by_id_and_user_id(session_id, user_id)
             if not session:
                 log.warning(f'No OAuth session found for user {user_id}, session {session_id}')
                 return None
 
-            if force_refresh or datetime.now() + timedelta(minutes=5) >= datetime.fromtimestamp(session.expires_at):
+            # Guard: MCP-provider sessions must be refreshed by
+            # oauth_client_manager, not the SSO OAuthManager.  If one
+            # reaches here (e.g. via a stale cookie), bail out early
+            # instead of attempting a refresh that will fail and delete
+            # the session (#24618).
+            if (session.provider or '').startswith('mcp:'):
+                log.debug(
+                    f'Skipping MCP session {session.id} (provider={session.provider}) '
+                    f'in SSO OAuthManager — handled by oauth_client_manager'
+                )
+                return None
+
+            if (
+                force_refresh
+                or session.expires_at is None
+                or datetime.now() + timedelta(minutes=5) >= datetime.fromtimestamp(session.expires_at)
+            ):
                 log.debug(f'Token refresh needed for user {user_id}, provider {session.provider}')
                 refreshed_token = await self._refresh_token(session)
                 if refreshed_token:
@@ -1021,7 +1109,7 @@ class OAuthManager:
                     log.warning(
                         f'Token refresh failed for user {user_id}, provider {session.provider}, deleting session {session.id}'
                     )
-                    OAuthSessions.delete_session_by_id(session.id)
+                    await OAuthSessions.delete_session_by_id(session.id)
 
                     return None
             return session.token
@@ -1046,7 +1134,7 @@ class OAuthManager:
 
             if refreshed_token:
                 # Update the session with new token data
-                session = OAuthSessions.update_session_by_id(session.id, refreshed_token)
+                session = await OAuthSessions.update_session_by_id(session.id, refreshed_token)
                 log.info(f'Successfully refreshed token for session {session.id}')
                 return session.token
             else:
@@ -1102,6 +1190,8 @@ class OAuthManager:
             # Add client_secret if available (some providers require it)
             if hasattr(client, 'client_secret') and client.client_secret:
                 refresh_data['client_secret'] = client.client_secret
+
+            # Add scope if available in client kwargs (some providers require it on refresh)
             if (
                 hasattr(client, 'client_kwargs')
                 and client.client_kwargs.get('scope')
@@ -1124,14 +1214,7 @@ class OAuthManager:
                         if 'refresh_token' not in new_token_data:
                             new_token_data['refresh_token'] = token_data['refresh_token']
 
-                        # Add timestamp for tracking
-                        new_token_data['issued_at'] = datetime.now().timestamp()
-
-                        # Calculate expires_at if we have expires_in
-                        if 'expires_in' in new_token_data and 'expires_at' not in new_token_data:
-                            new_token_data['expires_at'] = int(
-                                datetime.now().timestamp() + new_token_data['expires_in']
-                            )
+                        _normalize_token_expiry(new_token_data)
 
                         log.debug(f'Token refresh successful for provider {provider}')
                         return new_token_data
@@ -1144,16 +1227,19 @@ class OAuthManager:
             log.error(f'Exception during token refresh for provider {provider}: {e}')
             return None
 
-    def get_user_role(self, user, user_data):
-        user_count = Users.get_num_users()
+    async def get_user_role(self, user, user_data):
+        user_count = await Users.get_num_users()
         if user and user_count == 1:
             # If the user is the only user, assign the role "admin" - actually repairs role for single user on login
             log.debug('Assigning the only user the admin role')
             return 'admin'
         if not user and user_count == 0:
-            # If there are no users, assign the role "admin", as the first user will be an admin
-            log.debug('Assigning the first user the admin role')
-            return 'admin'
+            # First-user bootstrap: skip role management gating so the
+            # instance can be initialized.  We intentionally return the
+            # default role here (not 'admin') — admin promotion happens
+            # race-safely *after* insert via get_num_users() == 1.
+            log.debug('First user bootstrap: using default role (admin promotion deferred to post-insert)')
+            return auth_manager_config.DEFAULT_USER_ROLE
 
         if auth_manager_config.ENABLE_OAUTH_ROLE_MANAGEMENT:
             log.debug('Running OAUTH Role management')
@@ -1193,21 +1279,30 @@ class OAuthManager:
             log.debug(f'Accepted user roles: {oauth_allowed_roles}')
             log.debug(f'Accepted admin roles: {oauth_admin_roles}')
 
-            # If any roles are found, check if they match the allowed or admin roles
+            # If roles are present in the token, they must match; otherwise deny access
             if oauth_roles:
-                # If role management is enabled, and matching roles are provided, use the roles
+                matched = False
                 for allowed_role in oauth_allowed_roles:
-                    # If the user has any of the allowed roles, assign the role "user"
-                    if allowed_role in oauth_roles:
+                    if allowed_role == '*' or allowed_role in oauth_roles:
                         log.debug('Assigned user the user role')
                         role = 'user'
+                        matched = True
                         break
                 for admin_role in oauth_admin_roles:
-                    # If the user has any of the admin roles, assign the role "admin"
                     if admin_role in oauth_roles:
                         log.debug('Assigned user the admin role')
                         role = 'admin'
+                        matched = True
                         break
+                if not matched:
+                    log.warning(
+                        f'OAuth role management enabled but user roles do not match any allowed/admin roles. '
+                        f'User roles: {oauth_roles}, allowed: {oauth_allowed_roles}, admin: {oauth_admin_roles}'
+                    )
+                    raise HTTPException(
+                        status.HTTP_403_FORBIDDEN,
+                        detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+                    )
         else:
             if not user:
                 # If role management is disabled, use the default role for new users
@@ -1218,7 +1313,7 @@ class OAuthManager:
 
         return role
 
-    def update_user_groups(self, user, user_data, default_permissions, db=None):
+    async def update_user_groups(self, user, user_data, default_permissions, db=None):
         log.debug('Running OAUTH Group management')
         oauth_claim = auth_manager_config.OAUTH_GROUPS_CLAIM
 
@@ -1247,8 +1342,8 @@ class OAuthManager:
             else:
                 user_oauth_groups = []
 
-        user_current_groups: list[GroupModel] = Groups.get_groups_by_member_id(user.id, db=db)
-        all_available_groups: list[GroupModel] = Groups.get_all_groups(db=db)
+        user_current_groups: list[GroupModel] = await Groups.get_groups_by_member_id(user.id, db=db)
+        all_available_groups: list[GroupModel] = await Groups.get_all_groups(db=db)
 
         # Create groups if they don't exist and creation is enabled
         if auth_manager_config.ENABLE_OAUTH_GROUP_CREATION:
@@ -1256,7 +1351,7 @@ class OAuthManager:
             all_group_names = {g.name for g in all_available_groups}
             groups_created = False
             # Determine creator ID: Prefer admin, fallback to current user if no admin exists
-            admin_user = Users.get_super_admin_user()
+            admin_user = await Users.get_super_admin_user()
             creator_id = admin_user.id if admin_user else user.id
             log.debug(f'Using creator ID {creator_id} for potential group creation.')
 
@@ -1271,7 +1366,7 @@ class OAuthManager:
                             data={'config': {'share': auth_manager_config.OAUTH_GROUP_DEFAULT_SHARE}},
                         )
                         # Use determined creator ID (admin or fallback to current user)
-                        created_group = Groups.insert_new_group(creator_id, new_group_form, db=db)
+                        created_group = await Groups.insert_new_group(creator_id, new_group_form, db=db)
                         if created_group:
                             log.info(
                                 f"Successfully created group '{group_name}' with ID {created_group.id} using creator ID {creator_id}"
@@ -1286,7 +1381,7 @@ class OAuthManager:
 
             # Refresh the list of all available groups if any were created
             if groups_created:
-                all_available_groups = Groups.get_all_groups(db=db)
+                all_available_groups = await Groups.get_all_groups(db=db)
                 log.debug('Refreshed list of all available groups after creation.')
 
         log.debug(f'Oauth Groups claim: {oauth_claim}')
@@ -1303,14 +1398,14 @@ class OAuthManager:
             ):
                 # Remove group from user
                 log.debug(f'Removing user from group {group_model.name} as it is no longer in their oauth groups')
-                Groups.remove_users_from_group(group_model.id, [user.id], db=db)
+                await Groups.remove_users_from_group(group_model.id, [user.id], db=db)
 
                 # In case a group is created, but perms are never assigned to the group by hitting "save"
                 group_permissions = group_model.permissions
                 if not group_permissions:
                     group_permissions = default_permissions
 
-                Groups.update_group_by_id(
+                await Groups.update_group_by_id(
                     id=group_model.id,
                     form_data=GroupUpdateForm(
                         name=group_model.name,
@@ -1332,14 +1427,14 @@ class OAuthManager:
                 # Add user to group
                 log.debug(f'Adding user to group {group_model.name} as it was found in their oauth groups')
 
-                Groups.add_users_to_group(group_model.id, [user.id], db=db)
+                await Groups.add_users_to_group(group_model.id, [user.id], db=db)
 
                 # In case a group is created, but perms are never assigned to the group by hitting "save"
                 group_permissions = group_model.permissions
                 if not group_permissions:
                     group_permissions = default_permissions
 
-                Groups.update_group_by_id(
+                await Groups.update_group_by_id(
                     id=group_model.id,
                     form_data=GroupUpdateForm(
                         name=group_model.name,
@@ -1364,13 +1459,21 @@ class OAuthManager:
             return '/user.png'
 
         try:
+            validate_url(picture_url)
+
             get_kwargs = {}
             if access_token:
                 get_kwargs['headers'] = {
                     'Authorization': f'Bearer {access_token}',
                 }
             async with aiohttp.ClientSession(trust_env=True) as session:
-                async with session.get(picture_url, **get_kwargs, ssl=AIOHTTP_CLIENT_SESSION_SSL) as resp:
+                # allow_redirects=False prevents redirect-based SSRF: validate_url() only vetted the initial URL (CVE-2026-45401 cohort).
+                async with session.get(
+                    picture_url,
+                    **get_kwargs,
+                    ssl=AIOHTTP_CLIENT_SESSION_SSL,
+                    allow_redirects=AIOHTTP_CLIENT_ALLOW_REDIRECTS,
+                ) as resp:
                     if resp.ok:
                         picture = await resp.read()
                         base64_encoded_picture = base64.b64encode(picture).decode('utf-8')
@@ -1386,107 +1489,27 @@ class OAuthManager:
             return '/user.png'
 
     async def handle_login(self, request, provider):
-        if not auth_manager_config.ENABLE_OAUTH_LOGIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-
         if provider not in OAUTH_PROVIDERS:
             raise HTTPException(404)
-
-        allowed_login_providers = _resolve_allowed_providers(request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS)
-        if provider not in allowed_login_providers:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
         # If the provider has a custom redirect URL, use that, otherwise automatically generate one
-        redirect_uri = OAUTH_PROVIDERS[provider].get('redirect_uri') or request.url_for(
-            'oauth_login_callback', provider=provider
-        )
         client = self.get_client(provider)
         if client is None:
             raise HTTPException(404)
+        redirect_uri = (client.server_metadata or {}).get('redirect_uri') or request.url_for(
+            'oauth_login_callback', provider=provider
+        )
 
         kwargs = {}
         if auth_manager_config.OAUTH_AUDIENCE:
             kwargs['audience'] = auth_manager_config.OAUTH_AUDIENCE
+        if OAUTH_AUTHORIZE_PARAMS:
+            kwargs.update(OAUTH_AUTHORIZE_PARAMS)
 
-        response = await client.authorize_redirect(request, redirect_uri, **kwargs)
-
-        oauth_mode = (request.query_params.get('mode') or '').strip().lower()
-        if oauth_mode in {'connect', 'link'}:
-            token = _get_request_token(request)
-            if not token:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=ERROR_MESSAGES.INVALID_TOKEN,
-                )
-
-            try:
-                token_data = decode_token(token)
-            except Exception:
-                token_data = None
-            link_user_id = token_data.get('id') if token_data else None
-            link_user = Users.get_user_by_id(link_user_id) if link_user_id else None
-            if not link_user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=ERROR_MESSAGES.INVALID_TOKEN,
-                )
-
-            link_redirect = _sanitize_internal_redirect_path(request.query_params.get('redirect') or '/')
-
-            response.set_cookie(
-                key='pending_oauth_link_user_id',
-                value=link_user.id,
-                httponly=True,
-                samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
-                secure=WEBUI_AUTH_COOKIE_SECURE,
-            )
-            response.set_cookie(
-                key='pending_oauth_link_redirect',
-                value=link_redirect,
-                httponly=True,
-                samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
-                secure=WEBUI_AUTH_COOKIE_SECURE,
-            )
-
-        invite_code = (request.query_params.get('invite_code') or '').strip()
-        if invite_code:
-            response.set_cookie(
-                key='pending_invite_code',
-                value=invite_code,
-                httponly=True,
-                samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
-                secure=WEBUI_AUTH_COOKIE_SECURE,
-            )
-
-        return response
+        return await client.authorize_redirect(request, redirect_uri, **kwargs)
 
     async def handle_callback(self, request, provider, response, db=None):
-        if not auth_manager_config.ENABLE_OAUTH_LOGIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-
         if provider not in OAUTH_PROVIDERS:
             raise HTTPException(404)
-
-        allowed_login_providers = _resolve_allowed_providers(request.app.state.config.OAUTH_ALLOWED_LOGIN_PROVIDERS)
-        if provider not in allowed_login_providers:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-            )
-
-        link_user_id = (request.cookies.get('pending_oauth_link_user_id', '') or '').strip()
-        link_redirect_path = _sanitize_internal_redirect_path(
-            request.cookies.get('pending_oauth_link_redirect', '') or '/'
-        )
-        is_oauth_link_flow = bool(link_user_id)
 
         error_message = None
         try:
@@ -1500,6 +1523,27 @@ class OAuthManager:
 
             try:
                 token = await client.authorize_access_token(request, **auth_params)
+            except BadSignatureError:
+                # The IdP likely rotated its signing keys and the cached JWKS
+                # is stale.  Evict the cached key set so the next attempt
+                # fetches fresh keys from the jwks_uri.
+                log.warning(
+                    'OIDC bad_signature for provider %s — evicting cached JWKS and retrying',
+                    provider,
+                )
+                if hasattr(client, 'server_metadata') and isinstance(client.server_metadata, dict):
+                    client.server_metadata.pop('jwks', None)
+                try:
+                    token = await client.authorize_access_token(request, **auth_params)
+                except Exception as retry_exc:
+                    detailed_error = _build_oauth_callback_error_message(retry_exc)
+                    log.warning(
+                        'OAuth callback error during authorize_access_token retry for provider %s: %s',
+                        provider,
+                        detailed_error,
+                        exc_info=True,
+                    )
+                    raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
             except Exception as e:
                 detailed_error = _build_oauth_callback_error_message(e)
                 log.warning(
@@ -1512,12 +1556,21 @@ class OAuthManager:
 
             # Try to get userinfo from the token first, some providers include it there
             user_data: UserInfo = token.get('userinfo')
+            # Preserve extra claims from the ID token (e.g. roles, groups for
+            # Microsoft Entra ID) before the userinfo endpoint possibly overwrites them.
+            id_token_claims = dict(user_data) if user_data else {}
             if (
                 (not user_data)
                 or (auth_manager_config.OAUTH_EMAIL_CLAIM not in user_data)
                 or (auth_manager_config.OAUTH_USERNAME_CLAIM not in user_data)
             ):
                 user_data: UserInfo = await client.userinfo(token=token)
+                # Merge back ID token claims that the userinfo endpoint doesn't
+                # return.  Only backfill missing keys so userinfo always wins.
+                if user_data and id_token_claims:
+                    for key, value in id_token_claims.items():
+                        if key not in user_data:
+                            user_data[key] = value
             if provider == 'feishu' and isinstance(user_data, dict) and 'data' in user_data:
                 user_data = user_data['data']
             if not user_data:
@@ -1588,113 +1641,70 @@ class OAuthManager:
                 log.warning(f'OAuth callback failed, e-mail domain is not in the list of allowed domains: {user_data}')
                 raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_CRED)
 
-            if is_oauth_link_flow:
-                link_user = Users.get_user_by_id(link_user_id, db=db)
-                if not link_user:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail='Account linking session expired. Please try again.',
-                    )
-
-                existing_linked_user = Users.get_user_by_oauth_sub(provider, sub, db=db)
-                if existing_linked_user and existing_linked_user.id != link_user.id:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail='This SSO account is already linked to another user.',
-                    )
-
-                if not existing_linked_user:
-                    Users.update_user_oauth_by_id(link_user.id, provider, sub, db=db)
-
-                user = Users.get_user_by_id(link_user.id, db=db)
-            else:
-                # Check if the user exists
-                user = Users.get_user_by_oauth_sub(provider, sub, db=db)
-                if not user:
-                    # If the user does not exist, check if merging is enabled
-                    if auth_manager_config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL:
-                        # Check if the user exists by email
-                        user = Users.get_user_by_email(email, db=db)
-                        if user:
-                            # Update the user with the new oauth sub
-                            Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
+            # Check if the user exists
+            user = await Users.get_user_by_oauth_sub(provider, sub, db=db)
+            if not user:
+                # If the user does not exist, check if merging is enabled
+                if auth_manager_config.OAUTH_MERGE_ACCOUNTS_BY_EMAIL:
+                    # Check if the user exists by email
+                    user = await Users.get_user_by_email(email, db=db)
+                    if user:
+                        # Update the user with the new oauth sub
+                        await Users.update_user_oauth_by_id(user.id, provider, sub, db=db)
 
             if user:
-                if not is_oauth_link_flow:
-                    determined_role = self.get_user_role(user, user_data)
-                    if user.role != determined_role:
-                        Users.update_user_role_by_id(user.id, determined_role, db=db)
-                        # Update the user object in memory as well,
-                        # to avoid problems with the ENABLE_OAUTH_GROUP_MANAGEMENT check below
-                        user.role = determined_role
+                determined_role = await self.get_user_role(user, user_data)
+                if user.role != determined_role:
+                    await Users.update_user_role_by_id(user.id, determined_role, db=db)
+                    # Update the user object in memory as well,
+                    # to avoid problems with the ENABLE_OAUTH_GROUP_MANAGEMENT check below
+                    user.role = determined_role
 
-                    if auth_manager_config.OAUTH_UPDATE_NAME_ON_LOGIN:
-                        username_claim = auth_manager_config.OAUTH_USERNAME_CLAIM
-                        if username_claim:
-                            new_name = user_data.get(username_claim)
-                            if new_name and new_name != user.name:
-                                Users.update_user_by_id(user.id, {'name': new_name}, db=db)
-                                user.name = new_name
-                                log.debug(f'Updated name for user {user.email}')
+                if auth_manager_config.OAUTH_UPDATE_NAME_ON_LOGIN:
+                    username_claim = auth_manager_config.OAUTH_USERNAME_CLAIM
+                    if username_claim:
+                        new_name = user_data.get(username_claim)
+                        if new_name and new_name != user.name:
+                            await Users.update_user_by_id(user.id, {'name': new_name}, db=db)
+                            user.name = new_name
+                            log.debug(f'Updated name for user {user.email}')
 
-                    if auth_manager_config.OAUTH_UPDATE_EMAIL_ON_LOGIN:
-                        email_claim = auth_manager_config.OAUTH_EMAIL_CLAIM
-                        if email_claim:
-                            new_email = user_data.get(email_claim)
-                            if new_email and new_email.lower() != user.email.lower():
-                                existing_user = Users.get_user_by_email(new_email, db=db)
-                                if existing_user:
-                                    log.error(
-                                        f'Cannot update email to {new_email} for user {user.id} because it is already taken.'
-                                    )
-                                else:
-                                    Auths.update_email_by_id(user.id, new_email.lower(), db=db)
-                                    user.email = new_email.lower()
-                                    log.debug(f'Updated email for user {user.id}')
+                if auth_manager_config.OAUTH_UPDATE_EMAIL_ON_LOGIN:
+                    email_claim = auth_manager_config.OAUTH_EMAIL_CLAIM
+                    if email_claim:
+                        new_email = user_data.get(email_claim)
+                        if new_email and new_email.lower() != user.email.lower():
+                            existing_user = await Users.get_user_by_email(new_email, db=db)
+                            if existing_user:
+                                log.error(
+                                    f'Cannot update email to {new_email} for user {user.id} because it is already taken.'
+                                )
+                            else:
+                                await Auths.update_email_by_id(user.id, new_email.lower(), db=db)
+                                user.email = new_email.lower()
+                                log.debug(f'Updated email for user {user.id}')
 
-                    # Update profile picture if enabled and different from current
-                    if auth_manager_config.OAUTH_UPDATE_PICTURE_ON_LOGIN:
-                        picture_claim = auth_manager_config.OAUTH_PICTURE_CLAIM
-                        if picture_claim:
-                            new_picture_url = user_data.get(
-                                picture_claim,
-                                OAUTH_PROVIDERS[provider].get('picture_url', ''),
-                            )
-                            processed_picture_url = await self._process_picture_url(
-                                new_picture_url, token.get('access_token')
-                            )
-                            if processed_picture_url != user.profile_image_url:
-                                Users.update_user_profile_image_url_by_id(user.id, processed_picture_url, db=db)
-                                log.debug(f'Updated profile picture for user {user.email}')
+                # Update profile picture if enabled and different from current
+                if auth_manager_config.OAUTH_UPDATE_PICTURE_ON_LOGIN:
+                    picture_claim = auth_manager_config.OAUTH_PICTURE_CLAIM
+                    if picture_claim:
+                        new_picture_url = user_data.get(
+                            picture_claim,
+                            OAUTH_PROVIDERS[provider].get('picture_url', ''),
+                        )
+                        processed_picture_url = await self._process_picture_url(
+                            new_picture_url, token.get('access_token')
+                        )
+                        if processed_picture_url != user.profile_image_url:
+                            await Users.update_user_profile_image_url_by_id(user.id, processed_picture_url, db=db)
+                            log.debug(f'Updated profile picture for user {user.email}')
             else:
                 # If the user does not exist, check if signups are enabled
                 if auth_manager_config.ENABLE_OAUTH_SIGNUP:
-                    allowed_signup_providers = _resolve_allowed_providers(
-                        request.app.state.config.OAUTH_ALLOWED_SIGNUP_PROVIDERS
-                    )
-                    if provider not in allowed_signup_providers:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
-                        )
-
                     # Check if an existing user with the same email already exists
-                    existing_user = Users.get_user_by_email(email, db=db)
+                    existing_user = await Users.get_user_by_email(email, db=db)
                     if existing_user:
-                        raise HTTPException(400, detail=ERROR_MESSAGES.OAUTH_EMAIL_TAKEN)
-
-                    if request.app.state.config.ENABLE_INVITE_ONLY_AUTH and Users.has_users(db=db):
-                        pending_invite_code = (request.cookies.get('pending_invite_code', '') or '').strip()
-                        valid_invite, invite_error, _ = consume_invite_code(
-                            request.app.state.config,
-                            pending_invite_code,
-                            consumed_by=email,
-                        )
-                        if not valid_invite:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=invite_error,
-                            )
+                        raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
 
                     picture_claim = auth_manager_config.OAUTH_PICTURE_CLAIM
                     if picture_claim:
@@ -1712,17 +1722,25 @@ class OAuthManager:
                         log.warning('Username claim is missing, using email as name')
                         name = email
 
-                    user = Auths.insert_new_auth(
+                    user = await Auths.insert_new_auth(
                         email=email,
                         password=get_password_hash(str(uuid.uuid4())),  # Random password, not used
                         name=name,
                         profile_image_url=picture_url,
-                        role=self.get_user_role(None, user_data),
+                        role=await self.get_user_role(None, user_data),
                         oauth=oauth_data,
-                        password_change_required=True,
-                        password_login_enabled=False,
                         db=db,
                     )
+
+                    if not user:
+                        raise HTTPException(500, detail=ERROR_MESSAGES.CREATE_USER_ERROR)
+
+                    # Atomically check if this is the only user *after* the
+                    # insert to avoid TOCTOU race on first-user registration.
+                    # Matches signup_handler pattern.
+                    if await Users.get_num_users(db=db) == 1:
+                        await Users.update_user_role_by_id(user.id, 'admin', db=db)
+                        user = await Users.get_user_by_id(user.id, db=db)
 
                     if auth_manager_config.WEBHOOK_URL:
                         await post_webhook(
@@ -1736,7 +1754,7 @@ class OAuthManager:
                             },
                         )
 
-                    apply_default_group_assignment(request.app.state.config.DEFAULT_GROUP_ID, user.id, db=db)
+                    await apply_default_group_assignment(request.app.state.config.DEFAULT_GROUP_ID, user.id, db=db)
 
                 else:
                     raise HTTPException(
@@ -1748,8 +1766,8 @@ class OAuthManager:
                 data={'id': user.id},
                 expires_delta=parse_duration(auth_manager_config.JWT_EXPIRES_IN),
             )
-            if auth_manager_config.ENABLE_OAUTH_GROUP_MANAGEMENT and not is_oauth_link_flow and user.role != 'admin':
-                self.update_user_groups(
+            if auth_manager_config.ENABLE_OAUTH_GROUP_MANAGEMENT:
+                await self.update_user_groups(
                     user=user,
                     user_data=user_data,
                     default_permissions=request.app.state.config.USER_PERMISSIONS,
@@ -1765,26 +1783,17 @@ class OAuthManager:
             )
 
         redirect_base_url = (str(request.app.state.config.WEBUI_URL or request.base_url)).rstrip('/')
-        redirect_url = f'{redirect_base_url}{link_redirect_path}' if is_oauth_link_flow else f'{redirect_base_url}/auth'
+        redirect_url = f'{redirect_base_url}/auth'
 
         if error_message:
-            redirect_url = _append_query_params(
-                redirect_url,
-                ({'oauth_link_error': error_message} if is_oauth_link_flow else {'error': error_message}),
-            )
-            redirect_response = RedirectResponse(url=redirect_url, headers=response.headers)
-            redirect_response.delete_cookie('pending_invite_code')
-            redirect_response.delete_cookie('pending_oauth_link_user_id')
-            redirect_response.delete_cookie('pending_oauth_link_redirect')
-            return redirect_response
-
-        if is_oauth_link_flow:
-            redirect_url = _append_query_params(redirect_url, {'oauth_linked': provider})
+            redirect_url = f'{redirect_url}?error={urllib.parse.quote_plus(error_message)}'
+            return RedirectResponse(url=redirect_url, headers=response.headers)
 
         response = RedirectResponse(url=redirect_url, headers=response.headers)
-        response.delete_cookie('pending_invite_code')
-        response.delete_cookie('pending_oauth_link_user_id')
-        response.delete_cookie('pending_oauth_link_redirect')
+
+        # Compute cookie expiry from JWT lifetime
+        expires_delta = parse_duration(auth_manager_config.JWT_EXPIRES_IN)
+        cookie_max_age = int(expires_delta.total_seconds()) if expires_delta else None
 
         # Set the cookie token
         # Redirect back to the frontend with the JWT token
@@ -1794,6 +1803,7 @@ class OAuthManager:
             httponly=False,  # Required for frontend access
             samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
             secure=WEBUI_AUTH_COOKIE_SECURE,
+            **({'max_age': cookie_max_age} if cookie_max_age is not None else {}),
         )
 
         # Legacy cookies for compatibility with older frontend versions
@@ -1804,19 +1814,15 @@ class OAuthManager:
                 httponly=True,
                 samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
                 secure=WEBUI_AUTH_COOKIE_SECURE,
+                **({'max_age': cookie_max_age} if cookie_max_age is not None else {}),
             )
 
         try:
-            # Add timestamp for tracking
-            token['issued_at'] = datetime.now().timestamp()
-
-            # Calculate expires_at if we have expires_in
-            if 'expires_in' in token and 'expires_at' not in token:
-                token['expires_at'] = datetime.now().timestamp() + token['expires_in']
+            _normalize_token_expiry(token)
 
             # Enforce max concurrent sessions per user/provider to prevent
             # unbounded growth while allowing multi-device usage
-            sessions = OAuthSessions.get_sessions_by_user_id(user.id, db=db)
+            sessions = await OAuthSessions.get_sessions_by_user_id(user.id, db=db)
             provider_sessions = sorted(
                 [session for session in sessions if session.provider == provider],
                 key=lambda session: session.created_at,
@@ -1825,9 +1831,9 @@ class OAuthManager:
             # Keep the newest sessions up to the limit, prune the rest
             if len(provider_sessions) >= OAUTH_MAX_SESSIONS_PER_USER:
                 for old_session in provider_sessions[OAUTH_MAX_SESSIONS_PER_USER - 1 :]:
-                    OAuthSessions.delete_session_by_id(old_session.id, db=db)
+                    await OAuthSessions.delete_session_by_id(old_session.id, db=db)
 
-            session = OAuthSessions.create_session(
+            session = await OAuthSessions.create_session(
                 user_id=user.id,
                 provider=provider,
                 token=token,
@@ -1841,6 +1847,7 @@ class OAuthManager:
                     httponly=True,
                     samesite=WEBUI_AUTH_COOKIE_SAME_SITE,
                     secure=WEBUI_AUTH_COOKIE_SECURE,
+                    **({'max_age': cookie_max_age} if cookie_max_age is not None else {}),
                 )
 
                 log.info(f'Stored OAuth session server-side for user {user.id}, provider {provider}')
@@ -1850,3 +1857,186 @@ class OAuthManager:
             log.error(f'Failed to store OAuth session server-side: {e}')
 
         return response
+
+    async def handle_backchannel_logout(self, request, db=None):
+        """
+        Handle an OIDC Back-Channel Logout request.
+        Validates the logout_token, identifies the user, revokes their
+        sessions via Redis, and deletes their OAuth sessions.
+        Returns a JSONResponse per the OIDC Back-Channel Logout 1.0 spec.
+        """
+        import jwt as pyjwt
+        from fastapi.responses import JSONResponse
+
+        # 1. Extract logout_token from form body
+        try:
+            form = await request.form()
+            logout_token = form.get('logout_token')
+        except Exception:
+            logout_token = None
+
+        if not logout_token:
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'Missing logout_token parameter'},
+            )
+
+        # 2. Peek at unverified issuer to match against configured providers
+        try:
+            unverified_claims = pyjwt.decode(logout_token, options={'verify_signature': False})
+            token_issuer = unverified_claims.get('iss')
+        except Exception as e:
+            log.warning(f'Back-channel logout: cannot decode logout_token: {e}')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'Malformed logout_token'},
+            )
+
+        if not token_issuer:
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'logout_token missing iss claim'},
+            )
+
+        # 3. Find the configured provider whose issuer matches the token
+        matched_provider = None
+        matched_client_id = None
+        matched_jwks_uri = None
+        matched_issuer = None
+
+        for provider_name in OAUTH_PROVIDERS:
+            server_metadata_url = self.get_server_metadata_url(provider_name)
+            if not server_metadata_url:
+                continue
+
+            try:
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    async with session.get(server_metadata_url, ssl=AIOHTTP_CLIENT_SESSION_SSL) as r:
+                        if r.status != 200:
+                            continue
+                        oidc_config = await r.json()
+
+                provider_issuer = oidc_config.get('issuer')
+                if provider_issuer and provider_issuer == token_issuer:
+                    client = self.get_client(provider_name)
+                    matched_provider = provider_name
+                    matched_client_id = client.client_id if client else None
+                    matched_jwks_uri = oidc_config.get('jwks_uri')
+                    matched_issuer = provider_issuer
+                    break
+            except Exception as e:
+                log.debug(f'Back-channel logout: error checking provider {provider_name}: {e}')
+                continue
+
+        if not matched_provider or not matched_client_id or not matched_jwks_uri:
+            log.warning(f'Back-channel logout: no configured provider matches issuer {token_issuer}')
+            return JSONResponse(
+                status_code=400,
+                content={
+                    'error': 'invalid_request',
+                    'error_description': 'No configured provider matches token issuer',
+                },
+            )
+
+        # 4. Validate the logout_token signature and claims
+        try:
+            jwks_client = pyjwt.PyJWKClient(matched_jwks_uri)
+            signing_key = jwks_client.get_signing_key_from_jwt(logout_token)
+
+            claims = pyjwt.decode(
+                logout_token,
+                signing_key.key,
+                algorithms=['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512'],
+                audience=matched_client_id,
+                issuer=matched_issuer,
+                options={
+                    'require': ['iss', 'aud', 'iat', 'events'],
+                },
+            )
+        except pyjwt.InvalidTokenError as e:
+            log.warning(f'Back-channel logout: invalid logout_token: {e}')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': f'Invalid logout_token: {e}'},
+            )
+        except Exception as e:
+            log.error(f'Back-channel logout: error validating logout_token: {e}')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'Failed to validate logout_token'},
+            )
+
+        # 5. Validate events claim per spec
+        events = claims.get('events', {})
+        if 'http://schemas.openid.net/event/backchannel-logout' not in events:
+            log.warning('Back-channel logout: missing required backchannel-logout event claim')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'Missing backchannel-logout event claim'},
+            )
+
+        # 6. Per spec, back-channel logout tokens MUST NOT contain a nonce
+        if 'nonce' in claims:
+            log.warning('Back-channel logout: logout_token contains nonce (rejected per spec)')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'logout_token must not contain nonce'},
+            )
+
+        # 7. Extract sub and/or sid — at least one must be present
+        sub = claims.get('sub')
+        sid = claims.get('sid')
+
+        if not sub and not sid:
+            log.warning('Back-channel logout: logout_token contains neither sub nor sid')
+            return JSONResponse(
+                status_code=400,
+                content={'error': 'invalid_request', 'error_description': 'logout_token must contain sub or sid'},
+            )
+
+        # 8. Identify users to log out
+        users_to_logout = []
+        if sub:
+            user = await Users.get_user_by_oauth_sub(matched_provider, sub, db=db)
+            if user:
+                users_to_logout.append(user)
+
+        if not users_to_logout and sid:
+            log.debug(f'Back-channel logout: no user found by sub, sid-based lookup not yet supported (sid={sid})')
+
+        if not users_to_logout:
+            log.debug(f'Back-channel logout: no matching user for provider={matched_provider}, sub={sub}, sid={sid}')
+            return JSONResponse(status_code=200, content={})
+
+        # 9. Revoke tokens and delete sessions
+        redis = request.app.state.redis
+        if not redis:
+            log.warning(
+                'Back-channel logout: Redis not configured, cannot revoke JWT tokens. '
+                'OAuth sessions will be deleted but existing JWTs will remain valid until expiry.'
+            )
+
+        revoked_count = 0
+        for user in users_to_logout:
+            sessions = await OAuthSessions.get_sessions_by_user_id(user.id, db=db)
+            for oauth_session in sessions:
+                await OAuthSessions.delete_session_by_id(oauth_session.id, db=db)
+
+            if redis:
+                revocation_key = f'{REDIS_KEY_PREFIX}:auth:user:{user.id}:revoked_at'
+                await redis.set(
+                    revocation_key,
+                    str(int(time.time())),
+                    ex=60 * 60 * 24 * 30,
+                )
+                revoked_count += 1
+
+            log.info(
+                f'Back-channel logout: revoked sessions for user {user.id} '
+                f'(email={user.email}, provider={matched_provider}, sessions_deleted={len(sessions)})'
+            )
+
+        log.info(
+            f'Back-channel logout: completed for {len(users_to_logout)} user(s), {revoked_count} revocation(s) set'
+        )
+        return JSONResponse(status_code=200, content={})

@@ -5,7 +5,6 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
-	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 
 	import Cog6 from '$lib/components/icons/Cog6.svelte';
 	import ManageOllamaModal from './ManageOllamaModal.svelte';
@@ -50,20 +49,13 @@
 		config: config
 	}}
 	onDelete={() => {
-		showDeleteConfirmDialog = true;
+		onDelete();
+		showConfigModal = false;
 	}}
 	onSubmit={(connection) => {
 		url = connection.url;
 		config = { ...connection.config, key: connection.key };
 		onSubmit(connection);
-	}}
-/>
-
-<ConfirmDialog
-	bind:show={showDeleteConfirmDialog}
-	on:confirm={() => {
-		onDelete();
-		showConfigModal = false;
 	}}
 />
 

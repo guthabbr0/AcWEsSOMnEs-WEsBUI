@@ -21,6 +21,7 @@
 
 	let allItemsLoaded = false;
 	let loading = false;
+	let wasOpen = false;
 
 	const getPinnedMessages = async () => {
 		if (!channel) return;
@@ -37,10 +38,10 @@
 
 			if (res) {
 				pinnedMessages = [...(pinnedMessages ?? []), ...res];
-			}
 
-			if (res.length === 0) {
-				allItemsLoaded = true;
+				if (res.length === 0) {
+					allItemsLoaded = true;
+				}
 			}
 		} catch (error) {
 			console.error('Error fetching pinned messages:', error);
@@ -57,9 +58,11 @@
 		getPinnedMessages();
 	};
 
-	$: if (show) {
+	$: if (show && !wasOpen) {
 		init();
 	}
+
+	$: wasOpen = show;
 
 	onMount(() => {
 		init();

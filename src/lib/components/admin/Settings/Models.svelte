@@ -77,7 +77,7 @@
 	let viewOption = ''; // '' = All, 'enabled', 'disabled', 'visible', 'hidden'
 	let batchAccessMode = 'private';
 	let batchGroupId = '';
-	let batchNameTemplate = '{name}';
+	let batchNameTemplate = '';
 	let filterSignature = '';
 	let allFilteredSelected = false;
 	let selectedCountLabel = '';
@@ -687,12 +687,12 @@
 
 		window.addEventListener('keydown', onKeyDown);
 		window.addEventListener('keyup', onKeyUp);
-		window.addEventListener('blur-sm', onBlur);
+		window.addEventListener('blur', onBlur);
 
 		return () => {
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
-			window.removeEventListener('blur-sm', onBlur);
+			window.removeEventListener('blur', onBlur);
 		};
 	});
 </script>

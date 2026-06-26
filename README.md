@@ -9,6 +9,95 @@
 So, I am here to fix that. Awesome WebUI is a **fork** of [Open WebUI](https://github.com/open-webui/open-webui) focused on improving the experience for both admins and users. Let us get into the awesome changes.
 <small>(hah, you see what I did there?)</small>
 
+# Install & Run
+
+## Docker Compose
+
+This is the easiest way to run Awesome WebUI with persistent data:
+
+```bash
+git clone https://github.com/mehhovcki-dev/awesome-webui.git
+cd awesome-webui
+cp .env.example .env
+docker compose up -d --build
+```
+
+Open `http://localhost:3000`.
+
+The default compose file stores data in Docker volumes:
+
+- `open-webui` -> `/app/backend/data`
+- `ollama` -> `/root/.ollama`
+
+Keep these enabled in `.env` if you configure SSO/OAuth, connections, notices, custom emojis, or other admin settings from the UI:
+
+```env
+ENABLE_PERSISTENT_CONFIG=true
+ENABLE_OAUTH_PERSISTENT_CONFIG=true
+```
+
+## Run From Source
+
+Use this when developing the frontend/backend locally.
+
+```bash
+git clone https://github.com/mehhovcki-dev/awesome-webui.git
+cd awesome-webui
+cp .env.example .env
+npm install
+```
+
+Backend:
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+bash start.sh
+```
+
+Frontend dev server, in another terminal:
+
+```bash
+npm run dev
+```
+
+Open the frontend URL printed by Vite, usually `http://localhost:5173`.
+
+For a production-style frontend build:
+
+```bash
+npm run build
+```
+
+# Awesome WebUI 0.2.0 Update Log
+
+Awesome WebUI 0.2.0 rebases the fork onto Open WebUI `0.9.6` while preserving the Awesome WebUI feature set from the `0.8.11` era.
+
+```diff
++ Ported Awesome WebUI onto Open WebUI 0.9.6
++ Preserved Awesome admin settings: Authorization, SSO Management, Notices, Custom Emojis, and Notification Sounds
++ Restored Discord OAuth login/registration and provider-level login/signup allowlists
++ Restored invite-only registration, invite code generation, copying, deletion, prefixing, expiry, reuse, and max-use controls
++ Restored guest notification and MOTD surfaces
++ Restored custom emoji rendering, emoji picker integration, and status emoji layering behavior
++ Restored notification sounds, with admin-uploaded sounds selectable by users in Settings > Audio
++ Restored user presence/status persistence instead of forcing users invisible after reloads
++ Restored model health monitoring and model-health API/page integration
++ Added user moderation bans for website access, model chat access, and channel typing restrictions with visible reasons
++ Added Open WebUI-styled moderation UI for admins
++ Improved ban targeting for models/channels with selectable lists instead of raw ID entry
++ Improved Add/Edit Connection modal layout with grouped sections for endpoint, authentication, routing, models, tags, and advanced options
++ Improved Awesome WebUI admin UX for Custom Emojis, Notification Sounds, and SSO Management with compact close-control layouts
++ Added a custom compact notification sound player instead of native browser audio controls
++ Reworked Custom Emojis into a Discord-inspired asset list with inline edit, copy, uploader, and delete controls
++ Reworked SSO Management provider cards so enabled providers sort first and OAuth fields avoid browser autocomplete
++ Improved connection persistence guidance for SSO/OAuth and admin-managed provider settings
++ Hardened invite and config persistence paths for the 0.9.6 config system
++ Added migration support for the Awesome/Open WebUI multi-head Alembic history
+```
+
 # List of Changes
 
 ## Admin Panel

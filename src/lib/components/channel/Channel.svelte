@@ -131,6 +131,18 @@
 		latestPinnedMessage = Array.isArray(pinnedMessages) ? (pinnedMessages[0] ?? null) : null;
 	};
 
+	const syncPinnedPreview = (messageId, pinned, updatedMessage = null) => {
+		if (!pinned && latestPinnedMessage?.id === messageId) {
+			latestPinnedMessage = null;
+			void refreshLatestPinnedMessage();
+			return;
+		}
+
+		if (pinned) {
+			latestPinnedMessage = updatedMessage ?? messages.find((message) => message.id === messageId) ?? null;
+		}
+	};
+
 	const channelEventHandler = async (event) => {
 		if (event.channel_id === id) {
 			const type = event?.data?.type ?? null;
@@ -382,10 +394,7 @@
 				{channel}
 				{latestPinnedMessage}
 				onPin={(messageId, pinned) => {
-					if (!pinned && latestPinnedMessage?.id === messageId) {
-						latestPinnedMessage = null;
-						void refreshLatestPinnedMessage();
-					}
+					syncPinnedPreview(messageId, pinned);
 					messages = messages.map((message) => {
 						if (message.id === messageId) {
 							if (pinned) {
@@ -431,6 +440,9 @@
 									replyToMessage = message;
 									await tick();
 									chatInputElement?.focus();
+								}}
+								onPin={(messageId, pinned, updatedMessage) => {
+									syncPinnedPreview(messageId, pinned, updatedMessage);
 								}}
 								onThread={(id) => {
 									threadId = id;

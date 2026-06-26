@@ -5,6 +5,7 @@ export const APP_NAME = 'Awesome WebUI';
 export const WEBUI_GITHUB_REPO = 'mehhovcki-dev/awesome-webui';
 export const WEBUI_GITHUB_URL = `https://github.com/${WEBUI_GITHUB_REPO}`;
 export const WEBUI_RELEASES_URL = `${WEBUI_GITHUB_URL}/releases`;
+export const AWESOME_WEBUI_VERSION = '0.2.0';
 
 export const WEBUI_HOSTNAME = browser ? (dev ? `${location.hostname}:8080` : ``) : '';
 export const WEBUI_BASE_URL = browser ? (dev ? `http://${WEBUI_HOSTNAME}` : ``) : ``;
@@ -107,6 +108,7 @@ export const DEFAULT_CAPABILITIES = {
 	web_search: true,
 	image_generation: true,
 	code_interpreter: true,
+	terminal: true,
 	citations: true,
 	status_updates: true,
 	usage: undefined,

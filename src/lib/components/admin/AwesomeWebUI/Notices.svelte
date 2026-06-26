@@ -66,9 +66,10 @@
 		const { silent = false } = options;
 
 		const payload = {
-			...adminConfig,
+			ENABLE_SYSTEM_NOTICE: Boolean(adminConfig.ENABLE_SYSTEM_NOTICE),
 			SYSTEM_NOTICE_TITLE: String(adminConfig.SYSTEM_NOTICE_TITLE ?? ''),
 			SYSTEM_NOTICE_CONTENT: String(adminConfig.SYSTEM_NOTICE_CONTENT ?? ''),
+			ENABLE_MOTD: Boolean(adminConfig.ENABLE_MOTD),
 			MOTD_TITLE: String(adminConfig.MOTD_TITLE ?? 'Message of the day!'),
 			MOTD_CONTENT: String(adminConfig.MOTD_CONTENT ?? '')
 		};
@@ -112,7 +113,7 @@
 		autoSaveTimer = setTimeout(() => {
 			autoSaveTimer = null;
 			void runAutoSave();
-		}, 350);
+		}, 800);
 	};
 
 	onMount(async () => {
@@ -132,6 +133,7 @@
 		if (autoSaveTimer) {
 			clearTimeout(autoSaveTimer);
 			autoSaveTimer = null;
+			void runAutoSave();
 		}
 	});
 </script>

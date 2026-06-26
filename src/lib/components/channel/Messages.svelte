@@ -37,6 +37,7 @@
 	export let onLoad: Function = () => {};
 	export let onReply: Function = () => {};
 	export let onThread: Function = () => {};
+	export let onPin: Function = () => {};
 
 	let messagesLoading = false;
 
@@ -186,6 +187,7 @@
 
 					if (updatedMessage) {
 						messages = messages.map((m) => (m.id === updatedMessage.id ? updatedMessage : m));
+						onPin(updatedMessage.id, updatedMessage.is_pinned, updatedMessage);
 					}
 				}}
 				onThread={(id) => {

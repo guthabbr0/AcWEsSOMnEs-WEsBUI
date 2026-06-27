@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from open_webui.retrieval.web.main import SearchResult, get_filtered_results
+from open_webui.retrieval.web.proxy import aiohttp_proxy_kwargs
 from open_webui.utils.session_pool import get_session
 
 log = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ async def search_brave(
     query: str,
     count: int,
     filter_list: list[str | None] | None = None,
+    proxy_url: str | None = None,
 ) -> list[SearchResult]:
     """Query the Brave Web Search API and return normalised results.
 
@@ -31,11 +33,12 @@ async def search_brave(
     params = {'q': query, 'count': count}
 
     session = await get_session()
-    async with session.get(url, headers=headers, params=params) as response:
+    request_kwargs = aiohttp_proxy_kwargs(proxy_url)
+    async with session.get(url, headers=headers, params=params, **request_kwargs) as response:
         if response.status == 429:
             log.info('Brave Search rate-limited (429); retrying after %.1fs', _RATE_LIMIT_RETRY_DELAY)
             await asyncio.sleep(_RATE_LIMIT_RETRY_DELAY)
-            async with session.get(url, headers=headers, params=params) as retry_resp:
+            async with session.get(url, headers=headers, params=params, **request_kwargs) as retry_resp:
                 retry_resp.raise_for_status()
                 payload = await retry_resp.json()
         else:

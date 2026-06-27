@@ -53,6 +53,7 @@ from open_webui.models.auths import (
     UpdatePasswordForm,
 )
 from open_webui.models.groups import Groups
+from open_webui.models.moderation import UserModerationBans, get_moderation_ban_payload
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.users import (
     UpdateProfileForm,
@@ -218,6 +219,7 @@ ADMIN_CONFIG_KEYS = [
     'ENABLE_SYSTEM_NOTICE',
     'SYSTEM_NOTICE_TITLE',
     'SYSTEM_NOTICE_CONTENT',
+    'WEBSITE_BRAND_NAME',
     'ENABLE_MOTD',
     'MOTD_TITLE',
     'MOTD_CONTENT',
@@ -307,8 +309,14 @@ def _sanitize_custom_emoji_library(raw_emojis) -> list[dict]:
     return sanitized
 
 
-def _serialize_admin_config(request: Request) -> dict:
-    return {key: _get_config_value(request, key) for key in ADMIN_CONFIG_KEYS}
+async def _serialize_admin_config(request: Request, include_meta: bool = True, db: AsyncSession | None = None) -> dict:
+    data = {key: _get_config_value(request, key) for key in ADMIN_CONFIG_KEYS}
+    if include_meta:
+        data['_meta'] = {
+            'user_count': await Users.get_num_users(db=db),
+            'active_30_day_user_count': await Users.get_num_users_active_since(30, db=db),
+        }
+    return data
 
 
 def _ensure_config_key(request: Request, key: str, default=None) -> bool:
@@ -375,6 +383,9 @@ def _sanitize_admin_config_value(key: str, value):
 
     if key == 'CUSTOM_EMOJI_LIBRARY':
         return _sanitize_custom_emoji_library(value)
+
+    if key == 'WEBSITE_BRAND_NAME':
+        return _sanitize_text(value, 80) or 'Awesome WebUI'
 
     if key in {'FOLDER_MAX_FILE_COUNT', 'AUTOMATION_MAX_COUNT', 'AUTOMATION_MIN_INTERVAL'}:
         return _sanitize_optional_count(value)
@@ -476,6 +487,19 @@ async def _emit_public_config_update(request: Request):
                 'data': {
                     'type': 'config:update',
                     'data': {
+                        'name': _get_config_value(
+                            request,
+                            'WEBSITE_BRAND_NAME',
+                            getattr(request.app.state, 'WEBUI_NAME', 'Awesome WebUI'),
+                        ),
+	                        'website': {
+	                            'brand_name': _get_config_value(
+	                                request,
+	                                'WEBSITE_BRAND_NAME',
+	                                getattr(request.app.state, 'WEBUI_NAME', 'Awesome WebUI'),
+	                            ),
+	                            'powered_by': 'Open WebUI',
+	                        },
                         'features': {
                             'enable_signup': _get_config_value(request, 'ENABLE_SIGNUP', True),
                             'enable_password_signup': _get_config_value(request, 'ENABLE_PASSWORD_SIGNUP', True),
@@ -497,13 +521,13 @@ async def _emit_public_config_update(request: Request):
                                 'enabled': _get_config_value(request, 'ENABLE_MOTD', False),
                                 'title': _get_config_value(request, 'MOTD_TITLE', ''),
                                 'content': _get_config_value(request, 'MOTD_CONTENT', ''),
-                            },
-                            'notification_sounds': _get_config_value(request, 'NOTIFICATION_SOUND_LIBRARY', []),
-                            'custom_emojis': _get_config_value(request, 'CUSTOM_EMOJI_LIBRARY', []),
-                            'pending_user_overlay_title': _get_config_value(request, 'PENDING_USER_OVERLAY_TITLE', ''),
-                            'pending_user_overlay_content': _get_config_value(request, 'PENDING_USER_OVERLAY_CONTENT', ''),
-                            'response_watermark': _get_config_value(request, 'RESPONSE_WATERMARK', ''),
-                        },
+	                            },
+	                            'notification_sounds': _get_config_value(request, 'NOTIFICATION_SOUND_LIBRARY', []),
+	                            'custom_emojis': _get_config_value(request, 'CUSTOM_EMOJI_LIBRARY', []),
+	                            'pending_user_overlay_title': _get_config_value(request, 'PENDING_USER_OVERLAY_TITLE', ''),
+	                            'pending_user_overlay_content': _get_config_value(request, 'PENDING_USER_OVERLAY_CONTENT', ''),
+	                            'response_watermark': _get_config_value(request, 'RESPONSE_WATERMARK', ''),
+	                        },
                     },
                 },
             },
@@ -527,6 +551,19 @@ async def create_session_response(
         response: FastAPI response object (required if set_cookie is True)
         set_cookie: Whether to set the auth cookie on the response
     """
+    if user.role != 'admin':
+        site_ban = await UserModerationBans.get_active_site_ban(user.id, db=db)
+        if site_ban:
+            if response:
+                response.delete_cookie('token')
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    'code': 'moderation_site_ban',
+                    'ban': get_moderation_ban_payload(site_ban),
+                },
+            )
+
     expires_delta = parse_duration(request.app.state.config.JWT_EXPIRES_IN)
     expires_at = None
     if expires_delta:
@@ -1449,12 +1486,35 @@ async def get_admin_details(
 
 
 @router.get('/admin/config')
-async def get_admin_config(request: Request, user=Depends(get_admin_user)):
-    return _serialize_admin_config(request)
+async def get_admin_config(
+    request: Request,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    return await _serialize_admin_config(request, db=db)
+
+
+@router.get('/admin/config/backup')
+async def export_admin_config_backup(
+    request: Request,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    return {
+        'kind': 'awesome-webui-admin-config-backup',
+        'version': 1,
+        'created_at': int(time.time()),
+        'config': await _serialize_admin_config(request, include_meta=False, db=db),
+    }
 
 
 class AdminConfig(BaseModel):
     model_config = ConfigDict(extra='allow')
+
+
+class AdminConfigBackupImport(BaseModel):
+    model_config = ConfigDict(extra='allow')
+    config: dict | None = None
 
 
 async def _can_user_create_invite_codes(user, config, db: AsyncSession) -> tuple[bool, str, int]:
@@ -1563,8 +1623,27 @@ async def delete_invite_code(
 
 
 @router.post('/admin/config')
-async def update_admin_config(request: Request, form_data: AdminConfig, user=Depends(get_admin_user)):
+async def update_admin_config(
+    request: Request,
+    form_data: AdminConfig,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
     payload = form_data.model_dump(exclude_unset=True)
+    return await apply_admin_config_payload(request, payload, db=db)
+
+
+def _website_license_attestation_valid(attestation: dict | None) -> bool:
+    return bool(
+        isinstance(attestation, dict)
+        and attestation.get('accepted')
+        and attestation.get('qualifies_under_license')
+        and attestation.get('retain_attribution')
+        and attestation.get('accept_responsibility')
+    )
+
+
+async def apply_admin_config_payload(request: Request, payload: dict, db: AsyncSession | None = None):
     oauth_changed = False
 
     for key, value in payload.items():
@@ -1580,6 +1659,8 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
             continue
 
         setattr(request.app.state.config, key, sanitized)
+        if key == 'WEBSITE_BRAND_NAME':
+            request.app.state.WEBUI_NAME = sanitized
         if 'OAUTH' in key or key.startswith(('GOOGLE_', 'MICROSOFT_', 'GITHUB_', 'OIDC_', 'FEISHU_', 'DISCORD_', 'GITLAB_', 'SLACK_')):
             oauth_changed = True
 
@@ -1587,7 +1668,20 @@ async def update_admin_config(request: Request, form_data: AdminConfig, user=Dep
         _reload_oauth_runtime(request)
 
     await _emit_public_config_update(request)
-    return _serialize_admin_config(request)
+    return await _serialize_admin_config(request, db=db)
+
+
+@router.post('/admin/config/backup')
+async def import_admin_config_backup(
+    request: Request,
+    form_data: AdminConfigBackupImport,
+    user=Depends(get_admin_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    payload = form_data.config if isinstance(form_data.config, dict) else form_data.model_dump(exclude_unset=True)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Invalid config backup.')
+    return await apply_admin_config_payload(request, payload, db=db)
 
 
 class LdapServerConfig(BaseModel):

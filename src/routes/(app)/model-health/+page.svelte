@@ -283,7 +283,7 @@
 			{#if error && !loading}
 				<div class="text-center text-xs text-red-500 py-8">{error}</div>
 			{:else if health && visibleModels.length > 0}
-				<div class="space-y-3 md:hidden">
+				<div class="space-y-3 lg:hidden">
 					{#each visibleModels as item (item.id)}
 						<div class="rounded-xl border border-gray-100 p-3 dark:border-gray-800">
 							<div class="flex items-start justify-between gap-3">
@@ -368,7 +368,7 @@
 					{/each}
 				</div>
 
-				<div class="hidden md:block overflow-x-auto">
+				<div class="hidden lg:block overflow-x-auto">
 					<table
 						class="w-full min-w-[980px] text-sm text-left text-gray-500 dark:text-gray-400 {loading
 							? 'opacity-20'
@@ -452,8 +452,8 @@
 													(e.currentTarget as HTMLImageElement).src = '/favicon.png';
 												}}
 											/>
-											<div class="flex flex-col gap-0.5 min-w-0">
-												<span class="font-medium text-gray-800 dark:text-gray-200">{item.name}</span
+											<div class="flex flex-col gap-0.5 min-w-0 max-w-[12rem] xl:max-w-[16rem]">
+												<span class="font-medium text-gray-800 dark:text-gray-200 break-normal whitespace-normal [overflow-wrap:anywhere]">{item.name}</span
 												>
 												<span class="text-[11px] text-gray-500 dark:text-gray-400 whitespace-nowrap"
 													>{item.provider ?? $i18n.t('Model')}</span

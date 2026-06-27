@@ -35,7 +35,7 @@ from open_webui.env import (
     pk,
 )
 from open_webui.models.auths import Auths
-from open_webui.models.moderation import UserModerationBans, get_moderation_ban_message
+from open_webui.models.moderation import UserModerationBans, get_moderation_ban_payload
 from open_webui.models.users import Users
 from open_webui.utils.access_control import has_permission
 from pytz import UTC
@@ -360,7 +360,10 @@ async def get_current_user(
                     if site_ban:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
-                            detail=get_moderation_ban_message(site_ban),
+                            detail={
+                                'code': 'moderation_site_ban',
+                                'ban': get_moderation_ban_payload(site_ban),
+                            },
                         )
 
                 if WEBUI_AUTH_TRUSTED_EMAIL_HEADER:

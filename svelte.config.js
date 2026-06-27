@@ -47,6 +47,8 @@ const config = {
 		// }
 	},
 	onwarn: (warning, handler) => {
+		if (process.env.ULTRAFAST_BUILD === 'true') return;
+
 		const { code } = warning;
 		if (code === 'css-unused-selector') return;
 

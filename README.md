@@ -71,6 +71,61 @@ For a production-style frontend build:
 npm run build
 ```
 
+## Migrate From Open WebUI
+
+If you already run Open WebUI, you can copy its persistent data into Awesome WebUI before the first Awesome WebUI start. Stop both instances first so `webui.db` is not being written while it is copied.
+
+Local/source installs:
+
+```bash
+python3 scripts/migrate_open_webui_data.py \
+  --source /path/to/open-webui/backend/data \
+  --target backend/data
+```
+
+Docker volume installs:
+
+```bash
+docker run --rm \
+  -v open-webui:/from:ro \
+  -v awesome-webui:/to \
+  -v "$PWD/scripts:/scripts:ro" \
+  python:3.11-slim \
+  python /scripts/migrate_open_webui_data.py --source /from --target /to
+```
+
+The tool copies chats, users, files, uploads, vector DB data, admin config, connections, OAuth/SSO config, notices, emojis, sounds, and other persistent Open WebUI data. If the Awesome WebUI target already has data, it writes a backup archive before overwriting files. After copying, start Awesome WebUI once and let its startup migrations upgrade `webui.db`.
+
+Useful flags:
+
+```bash
+--dry-run      # preview what would be copied
+--skip-cache   # skip cache/ to make the migration smaller
+--backup-dir   # choose where target backups are written
+```
+
+If users get logged out after migration, reuse the same `WEBUI_SECRET_KEY` from the old Open WebUI instance.
+
+# Awesome WebUI 0.2.1 Update Log
+
+Awesome WebUI 0.2.1 is a polish and stabilization release for the 0.2.x port. It focuses on moderation, connection key pools, channel emoji behavior, search proxies, migration tooling, and mobile fixes.
+
+```diff
++ Added a global moderation center, appeal notifications, user risk signals, and connection change audit logging
++ Improved website bans so banned users are kicked out quickly, login stays blocked, and admins can unban more easily
++ Added Open WebUI data migration tooling for moving existing persistent data into Awesome WebUI
++ Added web-search proxy support
++ Added OpenAI-compatible API key pools with first/random/sticky-until-failure/switch-each-message strategies
++ Fixed Key Pool authentication so it keeps the same methods as Single Key: None, Bearer, Session, OAuth, and Entra ID
++ Improved Add/Edit Connection authentication UX with a clearer Single Key / Key Pool switch
++ Improved channel emoji parsing, custom emoji replacement, duplicate picker behavior, and emoji-only message sizing
++ Added Discord-style channel message editing and keyboard shortcuts
++ Fixed pinned-message state syncing after unpinning
++ Fixed model Access menu failures and the model quick-change {name} label bug
++ Fixed mobile Notes duplicate toolbars, sidebar reopen positioning, and model-health name wrapping
++ Removed the experimental Website customization section from the 0.2.1 release line
+```
+
 # Awesome WebUI 0.2.0 Update Log
 
 Awesome WebUI 0.2.0 rebases the fork onto Open WebUI `0.9.6` while preserving the Awesome WebUI feature set from the `0.8.11` era.

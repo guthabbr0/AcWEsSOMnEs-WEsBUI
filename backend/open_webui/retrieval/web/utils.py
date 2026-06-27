@@ -50,6 +50,7 @@ from open_webui.env import AIOHTTP_CLIENT_ALLOW_REDIRECTS, AIOHTTP_CLIENT_SESSIO
 from open_webui.retrieval.loaders.external_web import ExternalWebLoader
 from open_webui.retrieval.loaders.tavily import TavilyLoader
 from open_webui.retrieval.web.firecrawl import scrape_firecrawl_url
+from open_webui.retrieval.web.proxy import aiohttp_proxy_kwargs, playwright_proxy_config, requests_proxy_kwargs
 from open_webui.utils.misc import is_string_allowed
 
 log = logging.getLogger(__name__)
@@ -620,7 +621,7 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
 class SafeWebBaseLoader(WebBaseLoader):
     """WebBaseLoader with enhanced error handling for URLs."""
 
-    def __init__(self, trust_env: bool = False, *args, **kwargs):
+    def __init__(self, trust_env: bool = False, proxy_url: str | None = None, *args, **kwargs):
         """Initialize SafeWebBaseLoader
         Args:
             trust_env (bool, optional): set to True if using proxy to make web requests, for example
@@ -628,6 +629,7 @@ class SafeWebBaseLoader(WebBaseLoader):
         """
         super().__init__(*args, **kwargs)
         self.trust_env = trust_env
+        self.proxy_url = proxy_url
 
         # Propagate USER_AGENT env var so that both the sync _scrape() and
         # async _fetch() paths present a real UA instead of python-requests/2.x
@@ -647,7 +649,9 @@ class SafeWebBaseLoader(WebBaseLoader):
         self.requests_kwargs = {
             **(self.requests_kwargs or {}),
             'allow_redirects': AIOHTTP_CLIENT_ALLOW_REDIRECTS,
+            **requests_proxy_kwargs(proxy_url),
         }
+        self.aiohttp_request_kwargs = aiohttp_proxy_kwargs(proxy_url)
 
         self.session.mount('http://', _SSRFSafeAdapter())
         self.session.mount('https://', _SSRFSafeAdapter())
@@ -668,7 +672,7 @@ class SafeWebBaseLoader(WebBaseLoader):
 
                     async with session.get(
                         url,
-                        **(self.requests_kwargs | kwargs),
+                        **({k: v for k, v in self.requests_kwargs.items() if k != 'proxies'} | kwargs | self.aiohttp_request_kwargs),
                     ) as response:
                         if self.raise_for_status:
                             response.raise_for_status()
@@ -741,6 +745,7 @@ def get_web_loader(
     verify_ssl: bool = True,
     requests_per_second: int = 2,
     trust_env: bool = False,
+    proxy_url: str | None = None,
 ):
     # Check if the URLs are valid
     safe_urls = safe_validate_urls([urls] if isinstance(urls, str) else urls)
@@ -759,6 +764,7 @@ def get_web_loader(
 
     if WEB_LOADER_ENGINE.value == '' or WEB_LOADER_ENGINE.value == 'safe_web':
         WebLoaderClass = SafeWebBaseLoader
+        web_loader_args['proxy_url'] = proxy_url
 
         request_kwargs = {}
         if WEB_LOADER_TIMEOUT.value:
@@ -776,6 +782,8 @@ def get_web_loader(
     if WEB_LOADER_ENGINE.value == 'playwright':
         WebLoaderClass = SafePlaywrightURLLoader
         web_loader_args['playwright_timeout'] = PLAYWRIGHT_TIMEOUT.value
+        if proxy_config := playwright_proxy_config(proxy_url):
+            web_loader_args['proxy'] = proxy_config
         if PLAYWRIGHT_WS_URL.value:
             web_loader_args['playwright_ws_url'] = PLAYWRIGHT_WS_URL.value
 
@@ -783,6 +791,8 @@ def get_web_loader(
         WebLoaderClass = SafeFireCrawlLoader
         web_loader_args['api_key'] = FIRECRAWL_API_KEY.value
         web_loader_args['api_url'] = FIRECRAWL_API_BASE_URL.value
+        if proxy_config := playwright_proxy_config(proxy_url):
+            web_loader_args['proxy'] = proxy_config
         if FIRECRAWL_TIMEOUT.value:
             try:
                 web_loader_args['timeout'] = int(FIRECRAWL_TIMEOUT.value)
@@ -793,6 +803,8 @@ def get_web_loader(
         WebLoaderClass = SafeTavilyLoader
         web_loader_args['api_key'] = TAVILY_API_KEY.value
         web_loader_args['extract_depth'] = TAVILY_EXTRACT_DEPTH.value
+        if proxy_config := playwright_proxy_config(proxy_url):
+            web_loader_args['proxy'] = proxy_config
 
     if WEB_LOADER_ENGINE.value == 'external':
         WebLoaderClass = ExternalWebLoader

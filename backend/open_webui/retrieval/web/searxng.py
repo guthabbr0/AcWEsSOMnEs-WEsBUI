@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from open_webui.retrieval.web.main import SearchResult, get_filtered_results
+from open_webui.retrieval.web.proxy import aiohttp_proxy_kwargs
 from open_webui.utils.session_pool import get_session
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ async def search_searxng(
     query: str,
     count: int,
     filter_list: list[str | None] | None = None,
+    proxy_url: str | None = None,
     **kwargs,
 ) -> list[SearchResult]:
     """Query a SearXNG instance and return results sorted by relevance score.
@@ -48,7 +50,9 @@ async def search_searxng(
     log.debug('searching %s', query_url)
 
     session = await get_session()
-    async with session.get(query_url, headers=_SEARXNG_HEADERS, params=params) as response:
+    async with session.get(
+        query_url, headers=_SEARXNG_HEADERS, params=params, **aiohttp_proxy_kwargs(proxy_url)
+    ) as response:
         response.raise_for_status()
         payload = await response.json()
 

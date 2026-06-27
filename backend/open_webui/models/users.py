@@ -588,6 +588,16 @@ class UsersTable:
             )
             return result.scalar()
 
+    async def get_num_users_active_since(self, days: int = 30, db: AsyncSession | None = None) -> int:
+        async with get_async_db_context(db) as session:
+            since_timestamp = int(time.time()) - max(1, int(days)) * 86400
+            result = await session.execute(
+                select(func.count())
+                .select_from(User)
+                .where(or_(User.last_active_at >= since_timestamp, User.created_at >= since_timestamp))
+            )
+            return result.scalar() or 0
+
     async def update_user_role_by_id(self, id: str, role: str, db: AsyncSession | None = None) -> UserModel | None:
         async with get_async_db_context(db) as session:
             user = await session.get(User, id)

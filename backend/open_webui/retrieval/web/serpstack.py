@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from open_webui.retrieval.web.main import SearchResult, get_filtered_results
+from open_webui.retrieval.web.proxy import aiohttp_proxy_kwargs
 from open_webui.utils.session_pool import get_session
 
 log = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ async def search_serpstack(
     count: int,
     filter_list: list[str | None] | None = None,
     https_enabled: bool = True,
+    proxy_url: str | None = None,
 ) -> list[SearchResult]:
     """Query the serpstack.com API and return normalised results.
 
@@ -24,7 +26,7 @@ async def search_serpstack(
     params = {'access_key': api_key, 'query': query}
 
     session = await get_session()
-    async with session.get(url, params=params) as response:
+    async with session.get(url, params=params, **aiohttp_proxy_kwargs(proxy_url)) as response:
         response.raise_for_status()
         payload = await response.json()
 

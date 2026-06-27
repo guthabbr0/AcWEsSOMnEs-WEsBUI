@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from open_webui.retrieval.web.main import SearchResult, get_filtered_results
+from open_webui.retrieval.web.proxy import aiohttp_proxy_kwargs
 from open_webui.utils.session_pool import get_session
 
 log = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ async def search_google_pse(
     count: int,
     filter_list: list[str | None] | None = None,
     referer: str | None = None,
+    proxy_url: str | None = None,
 ) -> list[SearchResult]:
     """Query Google Programmable Search Engine with automatic pagination.
 
@@ -30,6 +32,7 @@ async def search_google_pse(
     start_index = 1  # PSE uses 1-based pagination
 
     session = await get_session()
+    request_kwargs = aiohttp_proxy_kwargs(proxy_url)
     remaining = count
     while remaining > 0:
         page_size = min(remaining, 10)
@@ -41,7 +44,7 @@ async def search_google_pse(
             'start': str(start_index),
         }
 
-        async with session.get(url, headers=headers, params=params) as response:
+        async with session.get(url, headers=headers, params=params, **request_kwargs) as response:
             response.raise_for_status()
             payload = await response.json()
 

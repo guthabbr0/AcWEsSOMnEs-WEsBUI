@@ -410,6 +410,7 @@ from open_webui.config import (
     WEB_SEARCH_CONCURRENT_REQUESTS,
     WEB_SEARCH_DOMAIN_FILTER_LIST,
     WEB_SEARCH_ENGINE,
+    WEB_SEARCH_PROXY_URL,
     WEB_SEARCH_RESULT_COUNT,
     WEB_SEARCH_TRUST_ENV,
     WEBHOOK_URL,
@@ -418,6 +419,7 @@ from open_webui.config import (
     WEBUI_BANNERS,
     WEBUI_NAME,
     WEBUI_URL,
+    WEBSITE_BRAND_NAME,
     WHISPER_LANGUAGE,
     WHISPER_MODEL,
     WHISPER_MODEL_AUTO_UPDATE,
@@ -489,7 +491,6 @@ from open_webui.env import (
     WEBUI_SESSION_COOKIE_SECURE,
 )
 from open_webui.internal.db import ScopedSession, engine, get_async_session
-from open_webui.models.access_grants import AccessGrants
 from open_webui.models.channels import Channels
 from open_webui.models.chats import ChatForm, Chats
 from open_webui.models.functions import Functions
@@ -567,6 +568,7 @@ from open_webui.utils.asgi_middleware import (
     WebsocketUpgradeGuardMiddleware,
 )
 from open_webui.utils.audit import AuditLevel, AuditLoggingMiddleware
+from open_webui.utils.channels import channel_has_write_access
 from open_webui.utils.auth import (
     create_admin_user,
     decode_token,
@@ -849,7 +851,8 @@ app.state.config = AppConfig(
 )
 app.state.redis = None
 
-app.state.WEBUI_NAME = WEBUI_NAME
+app.state.config.WEBSITE_BRAND_NAME = WEBSITE_BRAND_NAME
+app.state.WEBUI_NAME = app.state.config.WEBSITE_BRAND_NAME or WEBUI_NAME
 app.state.LICENSE_METADATA = None
 
 
@@ -1183,6 +1186,7 @@ app.state.config.WEB_LOADER_CONCURRENT_REQUESTS = WEB_LOADER_CONCURRENT_REQUESTS
 app.state.config.WEB_LOADER_TIMEOUT = WEB_LOADER_TIMEOUT
 
 app.state.config.WEB_SEARCH_TRUST_ENV = WEB_SEARCH_TRUST_ENV
+app.state.config.WEB_SEARCH_PROXY_URL = WEB_SEARCH_PROXY_URL
 app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL = BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
 app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER = BYPASS_WEB_SEARCH_WEB_LOADER
 
@@ -1930,12 +1934,7 @@ async def chat_completion(
                                 detail=ERROR_MESSAGES.DEFAULT(),
                             )
                     else:
-                        if not await AccessGrants.has_access(
-                            user_id=user.id,
-                            resource_type='channel',
-                            resource_id=channel.id,
-                            permission='write',
-                        ):
+                        if not await channel_has_write_access(user.id, channel):
                             raise HTTPException(
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=ERROR_MESSAGES.DEFAULT(),
@@ -2506,6 +2505,10 @@ async def get_app_config(request: Request):
         **({'onboarding': True} if onboarding else {}),
         'status': True,
         'name': app.state.WEBUI_NAME,
+        'website': {
+            'brand_name': app.state.WEBUI_NAME,
+            'powered_by': 'Open WebUI',
+        },
         'version': VERSION,
         'default_locale': str(DEFAULT_LOCALE),
         'oauth': {
@@ -2627,29 +2630,29 @@ async def get_app_config(request: Request):
             if user is not None and (user.role in ['admin', 'user'])
             else {
                 **(
-                    {
-                        'ui': {
-                            'system_notice': {
-                                'enabled': app.state.config.ENABLE_SYSTEM_NOTICE,
-                                'title': app.state.config.SYSTEM_NOTICE_TITLE,
-                                'content': app.state.config.SYSTEM_NOTICE_CONTENT,
-                            },
-                        },
+	                    {
+	                        'ui': {
+	                            'system_notice': {
+	                                'enabled': app.state.config.ENABLE_SYSTEM_NOTICE,
+	                                'title': app.state.config.SYSTEM_NOTICE_TITLE,
+	                                'content': app.state.config.SYSTEM_NOTICE_CONTENT,
+	                            },
+	                        },
                     }
                     if user is None
                     else {}
                 ),
                 **(
-                    {
-                        'ui': {
-                            'system_notice': {
-                                'enabled': app.state.config.ENABLE_SYSTEM_NOTICE,
-                                'title': app.state.config.SYSTEM_NOTICE_TITLE,
-                                'content': app.state.config.SYSTEM_NOTICE_CONTENT,
-                            },
-                            'pending_user_overlay_title': app.state.config.PENDING_USER_OVERLAY_TITLE,
-                            'pending_user_overlay_content': app.state.config.PENDING_USER_OVERLAY_CONTENT,
-                        }
+	                    {
+	                        'ui': {
+	                            'system_notice': {
+	                                'enabled': app.state.config.ENABLE_SYSTEM_NOTICE,
+	                                'title': app.state.config.SYSTEM_NOTICE_TITLE,
+	                                'content': app.state.config.SYSTEM_NOTICE_CONTENT,
+	                            },
+	                            'pending_user_overlay_title': app.state.config.PENDING_USER_OVERLAY_TITLE,
+	                            'pending_user_overlay_content': app.state.config.PENDING_USER_OVERLAY_CONTENT,
+	                        }
                     }
                     if user and user.role == 'pending'
                     else {}

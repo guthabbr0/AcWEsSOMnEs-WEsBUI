@@ -181,7 +181,7 @@
 	import { Fragment, DOMParser } from 'prosemirror-model';
 	import { EditorState, Plugin, PluginKey, TextSelection, Selection } from 'prosemirror-state';
 	import { Decoration, DecorationSet } from 'prosemirror-view';
-	import { Editor, Extension, mergeAttributes, nodeInputRule } from '@tiptap/core';
+	import { Editor, Extension, mergeAttributes } from '@tiptap/core';
 
 	import { AIAutocompletion } from './RichTextInput/AutoCompletion.js';
 
@@ -544,33 +544,6 @@
 			return;
 		}
 
-		const mentionNode = editor.schema.nodes.mention;
-		if (mentionNode) {
-			editor
-				.chain()
-				.focus()
-				.insertContent([
-					{
-						type: 'mention',
-						attrs: {
-							id: shortCode,
-							label: shortCode,
-							mentionSuggestionChar: ':'
-						}
-					},
-					...(appendSpace
-						? [
-								{
-									type: 'text',
-									text: ' '
-								}
-							]
-						: [])
-				])
-				.run();
-			return;
-		}
-
 		editor
 			.chain()
 			.focus()
@@ -740,6 +713,78 @@
 		}
 	});
 
+	const EmojiShortcodeDecoration = Extension.create({
+		name: 'emojiShortcodeDecoration',
+		addProseMirrorPlugins() {
+			return [
+				new Plugin({
+					key: new PluginKey('emojiShortcodeDecoration'),
+					props: {
+						decorations: (state) => {
+							const decorations = [];
+							const shortcodeRegex = /:([a-zA-Z0-9_+\-]+):/g;
+							const selectionFrom = state.selection.from;
+							const selectionTo = state.selection.to;
+
+							state.doc.descendants((node, pos) => {
+								if (!node.isText || !node.text) {
+									return;
+								}
+
+								shortcodeRegex.lastIndex = 0;
+								for (const match of node.text.matchAll(shortcodeRegex)) {
+									const rawShortCode = match[1] ?? '';
+									const shortCode = normalizeEmojiShortCode(rawShortCode);
+									const emojiImageSrc = getEmojiImageSrc(shortCode);
+
+									if (!shortCode || !emojiImageSrc) {
+										continue;
+									}
+
+									const from = pos + (match.index ?? 0);
+									const to = from + (match[0]?.length ?? 0);
+									const selectionInsideShortcode =
+										selectionFrom !== selectionTo ||
+										(selectionFrom > from && selectionFrom < to);
+
+									if (selectionInsideShortcode) {
+										continue;
+									}
+
+									decorations.push(
+										Decoration.widget(
+											from,
+											() => {
+												const img = document.createElement('img');
+												img.src = emojiImageSrc;
+												img.alt = `:${shortCode}:`;
+												img.title = `:${shortCode}:`;
+												img.className = 'emoji-shortcode-preview';
+												img.loading = 'lazy';
+												img.draggable = false;
+												img.contentEditable = 'false';
+												return img;
+											},
+											{
+												side: -1,
+												key: `emoji-shortcode-${from}-${to}-${shortCode}`
+											}
+										),
+										Decoration.inline(from, to, {
+											class: 'emoji-shortcode-hidden'
+										})
+									);
+								}
+							});
+
+							return decorations.length ? DecorationSet.create(state.doc, decorations) : null;
+						}
+					}
+				})
+			];
+		}
+	});
+
 	import { listDragHandlePlugin } from './RichTextInput/listDragHandlePlugin.js';
 
 	const ListItemDragHandle = Extension.create({
@@ -749,35 +794,6 @@
 				listDragHandlePlugin({
 					itemTypeNames: ['listItem', 'taskItem'],
 					getEditor: () => this.editor
-				})
-			];
-		}
-	});
-
-	const EmojiMentionInputRule = Extension.create({
-		name: 'emojiMentionInputRule',
-		addInputRules() {
-			const mentionNodeType = this.editor?.schema?.nodes?.mention;
-			if (!mentionNodeType) {
-				return [];
-			}
-
-			return [
-				nodeInputRule({
-					find: /:([a-zA-Z0-9_+\-]+):$/,
-					type: mentionNodeType,
-					getAttributes: (match) => {
-						const shortCode = normalizeEmojiShortCode(match?.[1] ?? '');
-						if (!shortCode || !getEmojiImageSrc(shortCode)) {
-							return false;
-						}
-
-						return {
-							id: shortCode,
-							label: shortCode,
-							mentionSuggestionChar: ':'
-						};
-					}
 				})
 			];
 		}
@@ -853,6 +869,7 @@
 				...(dragHandle ? [ListItemDragHandle] : []),
 				Placeholder.configure({ placeholder: () => _placeholder, showOnlyWhenEditable: false }),
 				SelectionDecoration,
+				EmojiShortcodeDecoration,
 
 				...(richText
 					? [
@@ -933,8 +950,7 @@
 										]
 									];
 								}
-							}),
-							EmojiMentionInputRule
+							})
 						]
 					: []),
 
@@ -998,6 +1014,9 @@
 								shouldShow: ({ editor, view, state, oldState }) => {
 									// safety check
 									if (!editor || !editor.view || editor.isDestroyed) {
+										return false;
+									}
+									if (!state.selection.empty) {
 										return false;
 									}
 									// default logic
@@ -1429,7 +1448,7 @@
 		<FormattingButtons {editor} />
 	</div>
 
-	<div bind:this={floatingMenuElement} id="floating-menu" class="p-0 {editor ? '' : 'hidden'}">
+	<div bind:this={floatingMenuElement} id="floating-menu" class="hidden md:block p-0 {editor ? '' : 'hidden'}">
 		<FormattingButtons {editor} />
 	</div>
 {/if}
@@ -1439,3 +1458,20 @@
 	dir="auto"
 	class="relative w-full min-w-full {className} {!editable ? 'cursor-not-allowed' : ''}"
 />
+
+<style>
+	:global(.emoji-shortcode-hidden) {
+		font-size: 0;
+		letter-spacing: 0;
+		color: transparent;
+	}
+
+	:global(.emoji-shortcode-preview) {
+		display: inline-block;
+		width: 1.12em;
+		height: 1.12em;
+		margin: 0 0.02em;
+		object-fit: contain;
+		vertical-align: -0.16em;
+	}
+</style>

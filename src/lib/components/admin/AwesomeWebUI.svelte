@@ -2,8 +2,8 @@
 	import { getContext, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { user } from '$lib/stores';
 
+	import { user } from '$lib/stores';
 	import Authorization from './AwesomeWebUI/Authorization.svelte';
 	import Notices from './AwesomeWebUI/Notices.svelte';
 	import SSO from './AwesomeWebUI/SSO.svelte';

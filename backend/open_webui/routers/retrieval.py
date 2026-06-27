@@ -494,6 +494,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             'ENABLE_WEB_SEARCH': request.app.state.config.ENABLE_WEB_SEARCH,
             'WEB_SEARCH_ENGINE': request.app.state.config.WEB_SEARCH_ENGINE,
             'WEB_SEARCH_TRUST_ENV': request.app.state.config.WEB_SEARCH_TRUST_ENV,
+            'WEB_SEARCH_PROXY_URL': request.app.state.config.WEB_SEARCH_PROXY_URL,
             'WEB_SEARCH_RESULT_COUNT': request.app.state.config.WEB_SEARCH_RESULT_COUNT,
             'WEB_SEARCH_CONCURRENT_REQUESTS': request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
             'WEB_FETCH_MAX_CONTENT_LENGTH': request.app.state.config.WEB_FETCH_MAX_CONTENT_LENGTH,
@@ -565,6 +566,7 @@ class WebConfig(BaseModel):
     ENABLE_WEB_SEARCH: bool | None = None
     WEB_SEARCH_ENGINE: str | None = None
     WEB_SEARCH_TRUST_ENV: bool | None = None
+    WEB_SEARCH_PROXY_URL: str | None = None
     WEB_SEARCH_RESULT_COUNT: int | None = None
     WEB_SEARCH_CONCURRENT_REQUESTS: int | None = None
     WEB_SEARCH_DOMAIN_FILTER_LIST: list[str | None] = []
@@ -1054,6 +1056,7 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
         request.app.state.config.ENABLE_WEB_SEARCH = form_data.web.ENABLE_WEB_SEARCH
         request.app.state.config.WEB_SEARCH_ENGINE = form_data.web.WEB_SEARCH_ENGINE
         request.app.state.config.WEB_SEARCH_TRUST_ENV = form_data.web.WEB_SEARCH_TRUST_ENV
+        request.app.state.config.WEB_SEARCH_PROXY_URL = form_data.web.WEB_SEARCH_PROXY_URL
         request.app.state.config.WEB_SEARCH_RESULT_COUNT = form_data.web.WEB_SEARCH_RESULT_COUNT
         request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS = form_data.web.WEB_SEARCH_CONCURRENT_REQUESTS
         request.app.state.config.WEB_FETCH_MAX_CONTENT_LENGTH = form_data.web.WEB_FETCH_MAX_CONTENT_LENGTH
@@ -1195,6 +1198,7 @@ async def update_rag_config(request: Request, form_data: ConfigForm, user=Depend
             'ENABLE_WEB_SEARCH': request.app.state.config.ENABLE_WEB_SEARCH,
             'WEB_SEARCH_ENGINE': request.app.state.config.WEB_SEARCH_ENGINE,
             'WEB_SEARCH_TRUST_ENV': request.app.state.config.WEB_SEARCH_TRUST_ENV,
+            'WEB_SEARCH_PROXY_URL': request.app.state.config.WEB_SEARCH_PROXY_URL,
             'WEB_SEARCH_RESULT_COUNT': request.app.state.config.WEB_SEARCH_RESULT_COUNT,
             'WEB_SEARCH_CONCURRENT_REQUESTS': request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
             'WEB_FETCH_MAX_CONTENT_LENGTH': request.app.state.config.WEB_FETCH_MAX_CONTENT_LENGTH,
@@ -1894,6 +1898,8 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
     blocking the event loop.
     """
 
+    proxy_url = request.app.state.config.WEB_SEARCH_PROXY_URL
+
     # TODO: add playwright to search the web
     if engine == 'ollama_cloud':
         return await asyncio.to_thread(
@@ -1925,6 +1931,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
                 query,
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                proxy_url=proxy_url,
                 **searxng_kwargs,
             )
         else:
@@ -1951,6 +1958,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
                 referer=request.app.state.config.WEBUI_URL,
+                proxy_url=proxy_url,
             )
         else:
             raise Exception('No GOOGLE_PSE_API_KEY or GOOGLE_PSE_ENGINE_ID found in environment variables')
@@ -1961,6 +1969,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
                 query,
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                proxy_url=proxy_url,
             )
         else:
             raise Exception('No BRAVE_SEARCH_API_KEY found in environment variables')
@@ -2017,6 +2026,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
                 https_enabled=request.app.state.config.SERPSTACK_HTTPS,
+                proxy_url=proxy_url,
             )
         else:
             raise Exception('No SERPSTACK_API_KEY found in environment variables')
@@ -2027,6 +2037,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
                 query,
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                proxy_url=proxy_url,
             )
         else:
             raise Exception('No SERPER_API_KEY found in environment variables')
@@ -2049,6 +2060,7 @@ async def search_web(request: Request, engine: str, query: str, user=None) -> li
             request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
             concurrent_requests=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
             backend=request.app.state.config.DDGS_BACKEND,
+            proxy_url=proxy_url,
         )
     elif engine == 'tavily':
         if request.app.state.config.TAVILY_API_KEY:
@@ -2309,6 +2321,7 @@ async def process_web_search(request: Request, form_data: SearchForm, user=Depen
                 verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
                 requests_per_second=request.app.state.config.WEB_LOADER_CONCURRENT_REQUESTS,
                 trust_env=request.app.state.config.WEB_SEARCH_TRUST_ENV,
+                proxy_url=request.app.state.config.WEB_SEARCH_PROXY_URL,
             )
             docs = await loader.aload()
 

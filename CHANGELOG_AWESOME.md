@@ -5,6 +5,57 @@ All notable Awesome WebUI (fork-specific) changes are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-27
+
+### Added
+
+- Added moderation appeal notifications so admins can see and react to ban appeals more easily.
+- Added a global moderation center for reviewing bans, appeals, user risk, and moderation activity.
+- Added user risk signals for moderation triage.
+- Added connection change audit logging for admin visibility into connection edits.
+- Added Open WebUI data migration helper script for easier migration from existing Open WebUI instances.
+- Added web-search proxy support so search providers can route requests through configured proxies.
+- Added API key pool support for OpenAI-compatible connections:
+  - random key per request,
+  - first key,
+  - same key until failure,
+  - switch key each message.
+- Added channel keyboard shortcuts and Discord-style message editing behavior.
+- Added large emoji rendering when a channel message contains only emoji.
+
+### Changed
+
+- Improved the Add/Edit Connection authentication UI with a `Single Key` / `Key Pool` switch.
+- Updated Key Pool authentication so it shares the same methods as Single Key: `None`, `Bearer`, `Session`, `OAuth`, and `Entra ID`.
+- Updated Key Pool behavior so multiple key inputs only appear for `Bearer` authentication.
+- Improved channel emoji input handling and custom emoji replacement.
+- Reworked channel emoji behavior to avoid treating every `:` as an emoji trigger.
+- Improved custom emoji rendering so browser emoji can be replaced with configured SVG/image emoji where available.
+- Improved model search/status feedback so users can tell when a model is actively searching.
+- Improved moderation ban duration inputs with days, months, and minutes.
+- Improved ban target selection for all models, DMs, and channels.
+- Ported the custom audio player style into channel sound surfaces and added volume controls.
+- Removed the experimental `Website` customization section from the 0.2.1 release line.
+
+### Fixed
+
+- Fixed Key Pool save/verify behavior for OpenAI-compatible connections.
+- Fixed Key Pool accidentally forcing the authentication method back to `Bearer`.
+- Fixed Single Key authentication methods being missing from Key Pool mode.
+- Fixed a missing `WEB_SEARCH_PROXY_URL` config key.
+- Fixed channel emoji regressions where invalid emoji could become malformed mention-like text.
+- Fixed channel emoji regressions where valid `:emoji:` input could duplicate colons or fail to replace.
+- Fixed duplicate emoji pickers appearing in channel input.
+- Fixed pinned message state not syncing after unpinning from the top pinned-message surface.
+- Fixed the model Access menu failing to open from the models page.
+- Fixed the model quick-change menu showing `{name}` instead of `Name template`.
+- Fixed banned users not being kicked out quickly enough after a website ban.
+- Fixed stale ban views lingering after an admin unbanned a user.
+- Fixed easier admin unban flows for website bans.
+- Fixed mobile notes showing duplicate formatting toolbars.
+- Fixed the mobile sidebar reopen area drifting offscreen.
+- Fixed model health model names wrapping into unusable columns on mobile.
+
 ## [0.2.0] - 2026-06-25
 
 ### Added

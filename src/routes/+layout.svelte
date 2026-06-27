@@ -12,6 +12,7 @@
 	import {
 		config,
 		user,
+		activeSiteBan,
 		settings,
 		theme,
 		WEBUI_NAME,
@@ -115,6 +116,7 @@
 
 	const BREAKPOINT = 768;
 	const DISCONNECT_TOAST_DELAY_MS = 2000;
+	const SITE_BAN_STORAGE_KEY = 'awu.active_site_ban';
 
 	const createMotdHash = (input) => {
 		let hash = 0;
@@ -312,9 +314,17 @@
 			return;
 		}
 
+		if (patch.name) {
+			WEBUI_NAME.set(patch.name);
+		}
+
 		config.update((currentConfig) => ({
 			...(currentConfig ?? {}),
 			...patch,
+			website: {
+				...(currentConfig?.website ?? {}),
+				...(patch.website ?? {})
+			},
 			ui: {
 				...(currentConfig?.ui ?? {}),
 				...(patch.ui ?? {})
@@ -362,6 +372,67 @@
 				return changed ? { ...channel, users: nextUsers } : channel;
 			});
 		});
+	};
+
+	const cacheActiveSiteBan = (ban) => {
+		if (!ban) {
+			activeSiteBan.set(null);
+			localStorage.removeItem(SITE_BAN_STORAGE_KEY);
+			return;
+		}
+
+		activeSiteBan.set(ban);
+		localStorage.setItem(SITE_BAN_STORAGE_KEY, JSON.stringify(ban));
+	};
+
+	const extractSiteBan = (error) => {
+		if (error?.code === 'moderation_site_ban') {
+			return error?.ban ?? null;
+		}
+		if (error?.detail?.code === 'moderation_site_ban') {
+			return error.detail?.ban ?? null;
+		}
+		return null;
+	};
+
+	const enforceSiteBan = async (ban) => {
+		if (!ban) {
+			return;
+		}
+
+		cacheActiveSiteBan(ban);
+		localStorage.removeItem('token');
+		chats.set(null);
+		channels.set([]);
+		user.set(undefined);
+
+		try {
+			await userSignOut();
+		} catch (error) {
+			console.error(error);
+		}
+
+		if ($page.url.pathname !== '/auth') {
+			await goto('/auth?banned=1');
+		}
+	};
+
+	const restoreCachedSiteBan = () => {
+		const raw = localStorage.getItem(SITE_BAN_STORAGE_KEY);
+		if (!raw) {
+			return;
+		}
+
+		try {
+			const ban = JSON.parse(raw);
+			if (ban?.expires_at && Number(ban.expires_at) <= Math.floor(Date.now() / 1000)) {
+				cacheActiveSiteBan(null);
+				return;
+			}
+			activeSiteBan.set(ban);
+		} catch {
+			localStorage.removeItem(SITE_BAN_STORAGE_KEY);
+		}
 	};
 
 	const setupSocket = async (enableWebsocket) => {
@@ -731,6 +802,28 @@
 
 		if (type === 'config:update') {
 			applyRealtimeConfigUpdate(data);
+			return;
+		}
+
+		if (type === 'moderation:site_ban') {
+			await enforceSiteBan(data);
+			return;
+		}
+
+		if (type === 'moderation:site_unban') {
+			cacheActiveSiteBan(null);
+			return;
+		}
+
+		if (type === 'moderation:appeal_created') {
+			if ($user?.role === 'admin') {
+				toast.info($i18n.t('New ban appeal received'), {
+					action: {
+						label: $i18n.t('Open'),
+						onClick: () => goto('/admin/moderation')
+					}
+				});
+			}
 			return;
 		}
 
@@ -1195,6 +1288,7 @@
 	};
 
 	onMount(async () => {
+		restoreCachedSiteBan();
 		window.addEventListener('message', windowMessageEventHandler);
 
 		let touchstartY = 0;
@@ -1359,9 +1453,9 @@
 		}
 
 		if (backendConfig) {
-			// Save Backend Status to Store
-			await config.set(backendConfig);
-			await WEBUI_NAME.set(backendConfig.name);
+				// Save Backend Status to Store
+				await config.set(backendConfig);
+				await WEBUI_NAME.set(backendConfig.name);
 
 			if ($config) {
 				await setupSocket($config.features?.enable_websocket ?? true);
@@ -1372,7 +1466,12 @@
 				if (localStorage.token) {
 					// Get Session User Info
 					const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-						toast.error(`${error}`);
+						const ban = extractSiteBan(error);
+						if (ban) {
+							void enforceSiteBan(ban);
+						} else {
+							toast.error(`${error}`);
+						}
 						return null;
 					});
 

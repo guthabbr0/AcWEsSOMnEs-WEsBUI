@@ -33,6 +33,7 @@ from open_webui.internal.db import get_async_session
 from open_webui.models.access_grants import AccessGrants
 from open_webui.models.groups import Groups
 from open_webui.models.models import Models
+from open_webui.models.moderation import UserModerationBans
 from open_webui.models.users import UserModel
 from open_webui.utils.access_control import check_model_access
 from open_webui.utils.auth import get_admin_user, get_verified_user
@@ -182,6 +183,24 @@ def get_api_key(idx, url, configs):
 router = APIRouter()
 
 
+def _summarize_ollama_connection_configs(base_urls: list[str], configs: dict) -> list[dict]:
+    summary = []
+    for idx, url in enumerate(base_urls):
+        config = configs.get(str(idx), configs.get(url, {})) if isinstance(configs, dict) else {}
+        summary.append(
+            {
+                'idx': idx,
+                'url': url,
+                'enabled': config.get('enable', True) if isinstance(config, dict) else True,
+                'connection_type': config.get('connection_type') if isinstance(config, dict) else None,
+                'prefix_id': config.get('prefix_id') if isinstance(config, dict) else None,
+                'model_count': len(config.get('model_ids') or []) if isinstance(config, dict) else 0,
+                'has_key': bool(config.get('key')) if isinstance(config, dict) else False,
+            }
+        )
+    return summary
+
+
 @router.head('/')
 @router.get('/')
 async def get_status() -> dict:
@@ -258,6 +277,11 @@ async def update_config(
     user=Depends(get_admin_user),
 ) -> dict:
     """Persist updated Ollama connection settings."""
+    before_summary = _summarize_ollama_connection_configs(
+        request.app.state.config.OLLAMA_BASE_URLS,
+        request.app.state.config.OLLAMA_API_CONFIGS,
+    )
+
     request.app.state.config.ENABLE_OLLAMA_API = form_data.ENABLE_OLLAMA_API
     request.app.state.config.OLLAMA_BASE_URLS = form_data.OLLAMA_BASE_URLS
     request.app.state.config.OLLAMA_API_CONFIGS = form_data.OLLAMA_API_CONFIGS
@@ -267,6 +291,19 @@ async def update_config(
     request.app.state.config.OLLAMA_API_CONFIGS = {
         k: v for k, v in request.app.state.config.OLLAMA_API_CONFIGS.items() if k in valid_keys
     }
+
+    await UserModerationBans.add_audit_log(
+        'connection.ollama_config_updated',
+        actor_user_id=user.id,
+        data={
+            'enabled': request.app.state.config.ENABLE_OLLAMA_API,
+            'before': before_summary,
+            'after': _summarize_ollama_connection_configs(
+                request.app.state.config.OLLAMA_BASE_URLS,
+                request.app.state.config.OLLAMA_API_CONFIGS,
+            ),
+        },
+    )
 
     return {
         'ENABLE_OLLAMA_API': request.app.state.config.ENABLE_OLLAMA_API,

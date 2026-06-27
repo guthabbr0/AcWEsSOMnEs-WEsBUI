@@ -16,6 +16,7 @@ def search_duckduckgo(
     filter_list: list[str | None] = None,
     concurrent_requests: int | None = None,
     backend: str | None = 'auto',
+    proxy_url: str | None = None,
 ) -> list[SearchResult]:
     """
     Search using DuckDuckGo's Search API and return the results as a list of SearchResult objects.
@@ -30,7 +31,7 @@ def search_duckduckgo(
     # The ddgs library (primp-based) does not auto-detect proxy env vars.
     # Resolve via stdlib getproxies() — same pattern as the other loaders.
     env_proxies = urllib.request.getproxies()
-    proxy = env_proxies.get('https') or env_proxies.get('http')
+    proxy = proxy_url or env_proxies.get('https') or env_proxies.get('http')
     search_results = []
     with DDGS(proxy=proxy) as ddgs:
         if concurrent_requests:

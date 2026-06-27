@@ -275,6 +275,17 @@ if CUSTOM_NAME:
 
 
 ####################################
+# WEBSITE
+####################################
+
+WEBSITE_BRAND_NAME = ConfigVar(
+    'WEBSITE_BRAND_NAME',
+    'ui.website.brand_name',
+    os.getenv('WEBSITE_BRAND_NAME', WEBUI_NAME),
+)
+
+
+####################################
 # DIRECT CONNECTIONS
 ####################################
 
@@ -1618,6 +1629,12 @@ WEB_SEARCH_TRUST_ENV = ConfigVar(
     'WEB_SEARCH_TRUST_ENV',
     'rag.web.search.trust_env',
     os.getenv('WEB_SEARCH_TRUST_ENV', 'True').lower() == 'true',
+)
+
+WEB_SEARCH_PROXY_URL = ConfigVar(
+    'WEB_SEARCH_PROXY_URL',
+    'rag.web.search.proxy_url',
+    os.getenv('WEB_SEARCH_PROXY_URL', ''),
 )
 
 

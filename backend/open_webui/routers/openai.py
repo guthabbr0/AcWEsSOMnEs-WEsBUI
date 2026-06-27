@@ -317,6 +317,85 @@ def get_microsoft_entra_id_access_token():
 router = APIRouter()
 
 
+_OPENAI_KEY_POOL_STATE: dict[str, int] = {}
+
+
+def _normalize_key_pool(config: Optional[dict], fallback_key: str | None = None) -> list[str]:
+    if not isinstance(config, dict):
+        return [fallback_key] if fallback_key else []
+
+    raw_keys = config.get('key_pool', [])
+    if isinstance(raw_keys, str):
+        candidates = re.split(r'[\n,;]+', raw_keys)
+    elif isinstance(raw_keys, list):
+        candidates = raw_keys
+    else:
+        candidates = []
+
+    normalized = []
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = candidate.get('key', '')
+        key = str(candidate or '').strip()
+        if key and key not in normalized:
+            normalized.append(key)
+
+    if not normalized and fallback_key:
+        normalized.append(fallback_key)
+    return normalized
+
+
+def select_openai_api_key(idx: int, url: str, fallback_key: str | None, config: Optional[dict]) -> str | None:
+    key_pool = _normalize_key_pool(config, fallback_key)
+    if not key_pool:
+        return fallback_key
+
+    strategy = str((config or {}).get('key_strategy') or 'single').strip().lower()
+    state_key = f'{idx}:{url}'
+
+    if strategy == 'random':
+        return random.choice(key_pool)
+
+    if strategy in {'round_robin', 'switch_each_message'}:
+        next_idx = _OPENAI_KEY_POOL_STATE.get(state_key, -1) + 1
+        _OPENAI_KEY_POOL_STATE[state_key] = next_idx % len(key_pool)
+        return key_pool[_OPENAI_KEY_POOL_STATE[state_key]]
+
+    # "sticky_until_failure" keeps the current key while the process is alive.
+    selected_idx = _OPENAI_KEY_POOL_STATE.get(state_key, 0) % len(key_pool)
+    _OPENAI_KEY_POOL_STATE[state_key] = selected_idx
+    return key_pool[selected_idx]
+
+
+def rotate_openai_api_key(idx: int, url: str, config: Optional[dict]) -> None:
+    key_pool = _normalize_key_pool(config)
+    if len(key_pool) < 2:
+        return
+    state_key = f'{idx}:{url}'
+    _OPENAI_KEY_POOL_STATE[state_key] = (_OPENAI_KEY_POOL_STATE.get(state_key, 0) + 1) % len(key_pool)
+
+
+def _summarize_connection_configs(base_urls: list[str], configs: dict, keys: list[str] | None = None) -> list[dict]:
+    summary = []
+    for idx, url in enumerate(base_urls):
+        config = configs.get(str(idx), configs.get(url, {})) if isinstance(configs, dict) else {}
+        key_pool = _normalize_key_pool(config, (keys or [''])[idx] if keys and idx < len(keys) else None)
+        summary.append(
+            {
+                'idx': idx,
+                'url': url,
+                'enabled': config.get('enable', True) if isinstance(config, dict) else True,
+                'provider': config.get('provider') if isinstance(config, dict) else None,
+                'auth_type': config.get('auth_type') if isinstance(config, dict) else None,
+                'prefix_id': config.get('prefix_id') if isinstance(config, dict) else None,
+                'model_count': len(config.get('model_ids') or []) if isinstance(config, dict) else 0,
+                'key_count': len(key_pool),
+                'key_strategy': config.get('key_strategy', 'single') if isinstance(config, dict) else 'single',
+            }
+        )
+    return summary
+
+
 @router.get('/config')
 async def get_config(request: Request, user=Depends(get_admin_user)):
     return {
@@ -336,6 +415,12 @@ class OpenAIConfigForm(BaseModel):
 
 @router.post('/config/update')
 async def update_config(request: Request, form_data: OpenAIConfigForm, user=Depends(get_admin_user)):
+    before_summary = _summarize_connection_configs(
+        request.app.state.config.OPENAI_API_BASE_URLS,
+        request.app.state.config.OPENAI_API_CONFIGS,
+        request.app.state.config.OPENAI_API_KEYS,
+    )
+
     request.app.state.config.ENABLE_OPENAI_API = form_data.ENABLE_OPENAI_API
     request.app.state.config.OPENAI_API_BASE_URLS = form_data.OPENAI_API_BASE_URLS
     request.app.state.config.OPENAI_API_KEYS = form_data.OPENAI_API_KEYS
@@ -358,6 +443,20 @@ async def update_config(request: Request, form_data: OpenAIConfigForm, user=Depe
     request.app.state.config.OPENAI_API_CONFIGS = {
         key: value for key, value in request.app.state.config.OPENAI_API_CONFIGS.items() if key in keys
     }
+
+    await UserModerationBans.add_audit_log(
+        'connection.openai_config_updated',
+        actor_user_id=user.id,
+        data={
+            'enabled': request.app.state.config.ENABLE_OPENAI_API,
+            'before': before_summary,
+            'after': _summarize_connection_configs(
+                request.app.state.config.OPENAI_API_BASE_URLS,
+                request.app.state.config.OPENAI_API_CONFIGS,
+                request.app.state.config.OPENAI_API_KEYS,
+            ),
+        },
+    )
 
     return {
         'ENABLE_OPENAI_API': request.app.state.config.ENABLE_OPENAI_API,
@@ -386,11 +485,11 @@ async def speech(request: Request, user=Depends(get_verified_user)):
             return FileResponse(file_path)
 
         url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-        key = request.app.state.config.OPENAI_API_KEYS[idx]
         api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
             str(idx),
             request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
         )
+        key = select_openai_api_key(idx, url, request.app.state.config.OPENAI_API_KEYS[idx], api_config)
 
         headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
 
@@ -660,12 +759,12 @@ async def get_models(request: Request, url_idx: int | None = None, user=Depends(
         models = await get_all_models(request, user=user)
     else:
         url = request.app.state.config.OPENAI_API_BASE_URLS[url_idx]
-        key = request.app.state.config.OPENAI_API_KEYS[url_idx]
 
         api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
             str(url_idx),
             request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
         )
+        key = select_openai_api_key(url_idx, url, request.app.state.config.OPENAI_API_KEYS[url_idx], api_config)
 
         r = None
         # Awesome WebUI: per-connection proxy routing (HTTP/SOCKS).
@@ -1233,7 +1332,7 @@ async def generate_chat_completion(
         }
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
+    key = select_openai_api_key(idx, url, request.app.state.config.OPENAI_API_KEYS[idx], api_config)
 
     # Check if model is a reasoning model that needs special handling
     if is_openai_new_model(payload['model']):
@@ -1324,6 +1423,7 @@ async def generate_chat_completion(
             # read the body and return a proper error response instead of
             # streaming the error back (which hides the error from logs).
             if r.status >= 400:
+                rotate_openai_api_key(idx, url, api_config)
                 error_body = await r.text()
                 log.error(
                     'Provider returned HTTP %d with SSE content-type: %s',
@@ -1353,6 +1453,7 @@ async def generate_chat_completion(
                 response = await r.text()
 
             if r.status >= 400:
+                rotate_openai_api_key(idx, url, api_config)
                 if isinstance(response, (dict, list)):
                     return JSONResponse(status_code=r.status, content=response)
                 else:
@@ -1401,11 +1502,11 @@ async def embeddings(request: Request, form_data: dict, user):
         idx = models[model_id]['urlIdx']
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
     api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
         str(idx),
         request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
     )
+    key = select_openai_api_key(idx, url, request.app.state.config.OPENAI_API_KEYS[idx], api_config)
 
     r = None
     streaming = False
@@ -1458,6 +1559,7 @@ async def embeddings(request: Request, form_data: dict, user):
                 response_data = await r.text()
 
             if r.status >= 400:
+                rotate_openai_api_key(idx, url, api_config)
                 if isinstance(response_data, (dict, list)):
                     return JSONResponse(status_code=r.status, content=response_data)
                 else:
@@ -1524,11 +1626,11 @@ async def responses(
             idx = models[model_id]['urlIdx']
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
     api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
         str(idx),
         request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
     )
+    key = select_openai_api_key(idx, url, request.app.state.config.OPENAI_API_KEYS[idx], api_config)
 
     r = None
     streaming = False
@@ -1579,6 +1681,7 @@ async def responses(
                 response_data = await r.text()
 
             if r.status >= 400:
+                rotate_openai_api_key(idx, url, api_config)
                 if isinstance(response_data, (dict, list)):
                     return JSONResponse(status_code=r.status, content=response_data)
                 else:
@@ -1633,13 +1736,13 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             idx = models[model_id]['urlIdx']
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
     api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
         str(idx),
         request.app.state.config.OPENAI_API_CONFIGS.get(
             request.app.state.config.OPENAI_API_BASE_URLS[idx], {}
         ),  # Legacy support
     )
+    key = select_openai_api_key(idx, url, request.app.state.config.OPENAI_API_KEYS[idx], api_config)
 
     r = None
     streaming = False
@@ -1696,6 +1799,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
                 response_data = await r.text()
 
             if r.status >= 400:
+                rotate_openai_api_key(idx, url, api_config)
                 if isinstance(response_data, (dict, list)):
                     return JSONResponse(status_code=r.status, content=response_data)
                 else:

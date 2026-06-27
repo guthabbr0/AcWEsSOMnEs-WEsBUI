@@ -17,6 +17,7 @@ export const WEBUI_DEPLOYMENT_ID = writable(null);
 
 export const config: Writable<Config | undefined> = writable(undefined);
 export const user: Writable<SessionUser | undefined> = writable(undefined);
+export const activeSiteBan: Writable<any | null> = writable(null);
 
 // Electron App
 export const isApp = writable(false);
@@ -279,6 +280,13 @@ type Config = {
 	license_metadata: any;
 	status: boolean;
 	name: string;
+	website?: {
+		brand_name?: string;
+		powered_by?: string;
+		active_theme_id?: string;
+		theme?: any;
+		themes?: any[];
+	};
 	version: string;
 	default_locale: string;
 	default_models: string;

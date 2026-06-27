@@ -4,7 +4,15 @@
 
 	import { getModels } from '$lib/apis';
 	import { getChannels } from '$lib/apis/channels';
-	import { createModerationBan } from '$lib/apis/moderation';
+	import {
+		createModerationBan,
+		getModerationAppeals,
+		getModerationAuditLogs,
+		getModerationBans,
+		getModerationUserRisk,
+		resolveModerationAppeal,
+		revokeModerationBan
+	} from '$lib/apis/moderation';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 
@@ -31,7 +39,13 @@
 	let models = [];
 	let channels = [];
 	let targetsLoading = false;
+	let activeBans = [];
+	let appeals = [];
+	let auditLogs = [];
+	let risk = null;
 	let loading = false;
+	let revokingBanId = null;
+	let resolvingAppealId = null;
 	let wasOpen = false;
 
 	$: if (show && !wasOpen) {
@@ -50,7 +64,15 @@
 		selectedModelIds = [];
 		selectedChannelIds = [];
 		loading = false;
+		activeBans = [];
+		appeals = [];
+		auditLogs = [];
+		risk = null;
 		void loadTargets();
+		void loadActiveBans();
+		void loadAppeals();
+		void loadAuditLogs();
+		void loadRisk();
 	};
 
 	const getDurationSeconds = () => {
@@ -122,6 +144,120 @@
 		targetsLoading = false;
 	};
 
+	const loadActiveBans = async () => {
+		if (!selectedUser?.id) {
+			activeBans = [];
+			return;
+		}
+
+		const res = await getModerationBans(localStorage.token, selectedUser.id, false).catch((error) => {
+			console.error(error);
+			return null;
+		});
+
+		activeBans = Array.isArray(res?.items) ? res.items : [];
+	};
+
+	const loadAppeals = async () => {
+		if (!selectedUser?.id) {
+			appeals = [];
+			return;
+		}
+
+		const res = await getModerationAppeals(localStorage.token, selectedUser.id).catch((error) => {
+			console.error(error);
+			return null;
+		});
+
+		appeals = Array.isArray(res?.items) ? res.items : [];
+	};
+
+	const loadAuditLogs = async () => {
+		if (!selectedUser?.id) {
+			auditLogs = [];
+			return;
+		}
+
+		const res = await getModerationAuditLogs(localStorage.token, selectedUser.id, 25).catch((error) => {
+			console.error(error);
+			return null;
+		});
+
+		auditLogs = Array.isArray(res?.items) ? res.items : [];
+	};
+
+	const loadRisk = async () => {
+		if (!selectedUser?.id) {
+			risk = null;
+			return;
+		}
+
+		risk = await getModerationUserRisk(localStorage.token, selectedUser.id).catch((error) => {
+			console.error(error);
+			return null;
+		});
+	};
+
+	const getRiskClasses = (level) => {
+		if (level === 'high') return 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300';
+		if (level === 'medium') return 'bg-yellow-50 text-yellow-700 dark:bg-yellow-950/30 dark:text-yellow-300';
+		if (level === 'low') return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300';
+		return 'bg-gray-50 text-gray-600 dark:bg-gray-850 dark:text-gray-300';
+	};
+
+	const revokeBanHandler = async (banId) => {
+		if (!banId || revokingBanId) {
+			return;
+		}
+
+		revokingBanId = banId;
+		const res = await revokeModerationBan(localStorage.token, banId).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		revokingBanId = null;
+
+		if (res) {
+			toast.success($i18n.t('Ban revoked'));
+			await loadActiveBans();
+			await loadAuditLogs();
+			await loadRisk();
+			dispatch('save');
+		}
+	};
+
+	const resolveAppealHandler = async (appealId, status = 'resolved') => {
+		if (!appealId || resolvingAppealId) {
+			return;
+		}
+
+		resolvingAppealId = appealId;
+		const res = await resolveModerationAppeal(localStorage.token, appealId, status).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		resolvingAppealId = null;
+
+		if (res) {
+			toast.success(status === 'rejected' ? $i18n.t('Appeal rejected') : $i18n.t('Appeal resolved'));
+			await loadAppeals();
+			await loadAuditLogs();
+			await loadRisk();
+		}
+	};
+
+	const getBanScopeLabel = (ban) => {
+		if (ban?.scope === 'site') return $i18n.t('Website');
+		if (ban?.scope === 'models') return $i18n.t('Models');
+		if (ban?.scope === 'channels') return $i18n.t('Channels');
+		return $i18n.t('Restriction');
+	};
+
+	const getBanExpiryLabel = (ban) => {
+		if (!ban?.expires_at) return $i18n.t('No automatic expiry');
+		return new Date(Number(ban.expires_at) * 1000).toLocaleString();
+	};
+
 	const submitHandler = async () => {
 		if (!selectedUser?.id || loading) return;
 
@@ -157,6 +293,9 @@
 
 		if (res) {
 			toast.success($i18n.t('Moderation ban created'));
+			await loadActiveBans();
+			await loadAuditLogs();
+			await loadRisk();
 			dispatch('save');
 			show = false;
 		}
@@ -164,6 +303,10 @@
 
 	onMount(() => {
 		void loadTargets();
+		void loadActiveBans();
+		void loadAppeals();
+		void loadAuditLogs();
+		void loadRisk();
 	});
 </script>
 
@@ -197,6 +340,141 @@
 					<div class="text-xs text-gray-500 truncate">{selectedUser?.email}</div>
 				</div>
 			</div>
+
+			{#if risk}
+				<div class="mb-4 rounded-xl border border-gray-100 p-3 dark:border-gray-850">
+					<div class="flex items-start justify-between gap-3">
+						<div class="min-w-0">
+							<div class="text-xs font-medium text-gray-500">{$i18n.t('User risk')}</div>
+							<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+								{risk.reasons?.length
+									? risk.reasons.join(' • ')
+									: $i18n.t('No moderation signals yet')}
+							</div>
+						</div>
+						<div class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium {getRiskClasses(risk.level)}">
+							{risk.score}
+						</div>
+					</div>
+				</div>
+			{/if}
+
+			{#if activeBans.length > 0}
+				<div class="mb-4 rounded-xl border border-gray-100 dark:border-gray-850 p-2">
+					<div class="px-1 pb-1.5 text-xs font-medium text-gray-500">
+						{$i18n.t('Active bans')}
+					</div>
+					<div class="flex flex-col gap-1.5">
+						{#each activeBans as ban (ban.id)}
+							<div
+								class="rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-gray-850"
+							>
+								<div class="flex items-start justify-between gap-3">
+									<div class="min-w-0">
+										<div class="font-medium text-gray-900 dark:text-gray-100">
+											{getBanScopeLabel(ban)}
+										</div>
+										<div class="mt-0.5 truncate text-gray-500 dark:text-gray-400">
+											{ban.reason}
+										</div>
+										<div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+											{$i18n.t('Expires')}: {getBanExpiryLabel(ban)}
+										</div>
+									</div>
+									<button
+										type="button"
+										class="shrink-0 rounded-full px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
+										disabled={revokingBanId === ban.id}
+										on:click={() => {
+											void revokeBanHandler(ban.id);
+										}}
+									>
+										{revokingBanId === ban.id ? $i18n.t('Revoking') : $i18n.t('Unban')}
+									</button>
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			{#if appeals.length > 0}
+				<div class="mb-4 rounded-xl border border-gray-100 dark:border-gray-850 p-2">
+					<div class="px-1 pb-1.5 text-xs font-medium text-gray-500">
+						{$i18n.t('Appeals')}
+					</div>
+					<div class="flex max-h-44 flex-col gap-1.5 overflow-y-auto">
+						{#each appeals as appeal (appeal.id)}
+							<div class="rounded-lg bg-gray-50 px-3 py-2 text-xs dark:bg-gray-850">
+								<div class="flex items-start justify-between gap-3">
+									<div class="min-w-0">
+										<div class="flex items-center gap-2">
+											<div class="font-medium text-gray-900 dark:text-gray-100">
+												{$i18n.t(appeal.status)}
+											</div>
+											<div class="text-[11px] text-gray-400">
+												{new Date(Number(appeal.created_at) * 1000).toLocaleString()}
+											</div>
+										</div>
+										<div class="mt-1 whitespace-pre-wrap text-gray-600 dark:text-gray-300">
+											{appeal.message}
+										</div>
+									</div>
+									{#if appeal.status === 'pending'}
+										<div class="flex shrink-0 flex-col gap-1">
+											<button
+												type="button"
+												class="rounded-full px-2.5 py-1 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-800"
+												disabled={resolvingAppealId === appeal.id}
+												on:click={() => {
+													void resolveAppealHandler(appeal.id, 'resolved');
+												}}
+											>
+												{$i18n.t('Resolve')}
+											</button>
+											<button
+												type="button"
+												class="rounded-full px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
+												disabled={resolvingAppealId === appeal.id}
+												on:click={() => {
+													void resolveAppealHandler(appeal.id, 'rejected');
+												}}
+											>
+												{$i18n.t('Reject')}
+											</button>
+										</div>
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			{#if auditLogs.length > 0}
+				<div class="mb-4 rounded-xl border border-gray-100 dark:border-gray-850 p-2">
+					<div class="px-1 pb-1.5 text-xs font-medium text-gray-500">
+						{$i18n.t('Moderation audit')}
+					</div>
+					<div class="flex max-h-36 flex-col gap-1 overflow-y-auto">
+						{#each auditLogs as log (log.id)}
+							<div class="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-gray-50 dark:hover:bg-gray-850">
+								<div class="min-w-0">
+									<div class="truncate font-medium text-gray-800 dark:text-gray-100">
+										{log.action}
+									</div>
+									<div class="truncate text-[11px] text-gray-400">
+										{log.actor_user_id ? `${$i18n.t('Actor')}: ${log.actor_user_id}` : $i18n.t('System')}
+									</div>
+								</div>
+								<div class="shrink-0 text-[11px] text-gray-400">
+									{new Date(Number(log.created_at) * 1000).toLocaleString()}
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
 
 			<div class="flex flex-col w-full mb-4">
 				<div class="mb-1.5 text-xs text-gray-500">{$i18n.t('Restriction')}</div>

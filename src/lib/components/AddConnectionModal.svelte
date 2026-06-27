@@ -33,6 +33,9 @@
 	let url = '';
 	let key = '';
 	let auth_type = 'bearer';
+	let useKeyPool = false;
+	let keyPoolKeys: string[] = [''];
+	let keyStrategy = 'single';
 
 	let connectionType = 'external';
 	let provider = '';
@@ -77,6 +80,37 @@
 			.filter(Boolean);
 	};
 
+	const normalizeKeyPool = (value: unknown): string[] => {
+		if (Array.isArray(value)) {
+			return value
+				.map((item) => (typeof item === 'string' ? item : item?.key))
+				.map((item) => `${item ?? ''}`.trim())
+				.filter(Boolean);
+		}
+
+		return `${value ?? ''}`
+			.split(/[\n,;]+/)
+			.map((item) => item.trim())
+			.filter(Boolean);
+	};
+
+	$: keyPool = normalizeKeyPool(keyPoolKeys);
+
+	const addKeyPoolKey = () => {
+		keyPoolKeys = [...keyPoolKeys, ''];
+	};
+
+	const removeKeyPoolKey = (idx: number) => {
+		keyPoolKeys = keyPoolKeys.filter((_, keyIdx) => keyIdx !== idx);
+		if (keyPoolKeys.length === 0) {
+			keyPoolKeys = [''];
+		}
+	};
+
+	const setKeyMode = (mode: 'single' | 'pool') => {
+		useKeyPool = mode === 'pool';
+	};
+
 	const verifyOllamaHandler = async () => {
 		// remove trailing slash from url
 		url = url.replace(/\/$/, '');
@@ -100,6 +134,7 @@
 		let _headers = null;
 		let _additionalJson = null;
 		const normalizedProxies = normalizeProxyList(proxies);
+		const normalizedKeyPool = !ollama && auth_type === 'bearer' && useKeyPool ? normalizeKeyPool(keyPoolKeys) : [];
 
 		if (headers) {
 			try {
@@ -137,12 +172,18 @@
 			localStorage.token,
 			{
 				url,
-				key,
+				key: auth_type === 'bearer' ? key || normalizedKeyPool[0] || '' : key,
 				config: {
 					auth_type,
 					...(provider ? { provider } : {}),
 					...(azure ? { azure: true } : {}),
 					api_version: apiVersion,
+					...(normalizedKeyPool.length > 0
+						? {
+								key_pool: normalizedKeyPool,
+								key_strategy: keyStrategy
+							}
+						: {}),
 					...(_headers ? { headers: _headers } : {}),
 					...(_additionalJson ? { additional_json: _additionalJson } : {}),
 					...(normalizedProxies.length > 0
@@ -195,6 +236,14 @@
 			return;
 		}
 
+		const normalizedKeyPool = !ollama && auth_type === 'bearer' && useKeyPool ? normalizeKeyPool(keyPoolKeys) : [];
+
+		if (!ollama && auth_type === 'bearer' && useKeyPool && normalizedKeyPool.length === 0) {
+			loading = false;
+			toast.error($i18n.t('Add at least one key or switch back to Single Key.'));
+			return;
+		}
+
 		if (azure) {
 			if (!apiVersion) {
 				loading = false;
@@ -203,7 +252,7 @@
 				return;
 			}
 
-			if (!key && !['azure_ad', 'microsoft_entra_id'].includes(auth_type)) {
+			if (!key && normalizedKeyPool.length === 0 && !['azure_ad', 'microsoft_entra_id'].includes(auth_type)) {
 				loading = false;
 
 				toast.error($i18n.t('Key is required'));
@@ -256,7 +305,7 @@
 
 		const connection = {
 			url,
-			key,
+			key: auth_type === 'bearer' ? key || normalizedKeyPool[0] || '' : key,
 			config: {
 				enable: enable,
 				tags: tags,
@@ -264,6 +313,12 @@
 				model_ids: modelIds,
 				connection_type: connectionType,
 				auth_type,
+				...(!ollama && normalizedKeyPool.length > 0
+					? {
+							key_pool: normalizedKeyPool,
+							key_strategy: keyStrategy
+						}
+					: {}),
 				headers: headers ? JSON.parse(headers) : undefined,
 				additional_json: additionalJson ? JSON.parse(additionalJson) : undefined,
 				...(normalizedProxies.length > 0
@@ -287,6 +342,9 @@
 		url = '';
 		key = '';
 		auth_type = 'bearer';
+		useKeyPool = false;
+		keyPoolKeys = [''];
+		keyStrategy = 'single';
 		prefixId = '';
 		tags = [];
 		modelIds = [];
@@ -303,6 +361,12 @@
 			key = connection.key;
 
 			auth_type = connection.config.auth_type ?? 'bearer';
+			keyPoolKeys = normalizeKeyPool(connection.config?.key_pool);
+			useKeyPool = keyPoolKeys.length > 0;
+			if (keyPoolKeys.length === 0) {
+				keyPoolKeys = [''];
+			}
+			keyStrategy = connection.config?.key_strategy ?? 'single';
 			headers = connection.config?.headers
 				? JSON.stringify(connection.config.headers, null, 2)
 				: '';
@@ -332,6 +396,9 @@
 			url = '';
 			key = '';
 			auth_type = 'bearer';
+			useKeyPool = false;
+			keyPoolKeys = [''];
+			keyStrategy = 'single';
 			enable = true;
 			connectionType = ollama ? 'local' : 'external';
 			azure = false;
@@ -498,60 +565,218 @@
 				<div>
 					<div class="text-sm font-medium">{$i18n.t('Authentication')}</div>
 					<div class="text-xs text-gray-500 dark:text-gray-400">
-						{$i18n.t('Choose how requests authenticate with this endpoint.')}
+						{#if useKeyPool}
+							{$i18n.t('Use multiple API keys for this provider.')}
+						{:else}
+							{$i18n.t('Choose how requests authenticate with this endpoint.')}
+						{/if}
 					</div>
 				</div>
 
-				<div class="grid gap-3 md:grid-cols-[11rem_1fr]">
-					<div>
-						<label
-							for="select-bearer-or-session"
-							class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
-							>{$i18n.t('Method')}</label
+				{#if !ollama}
+					<div class="flex w-fit rounded-lg bg-gray-50 p-0.5 text-xs dark:bg-gray-850">
+						<button
+							type="button"
+							class="rounded-md px-3 py-1.5 font-medium transition {!useKeyPool
+								? 'bg-white text-gray-900 shadow-xs dark:bg-gray-700 dark:text-gray-100'
+								: 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}"
+							on:click={() => setKeyMode('single')}
 						>
-						<select
-							id="select-bearer-or-session"
-							class="w-full rounded-lg border border-gray-100 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-850 dark:bg-gray-900"
-							bind:value={auth_type}
+							{$i18n.t('Single Key')}
+						</button>
+						<button
+							type="button"
+							class="rounded-md px-3 py-1.5 font-medium transition {useKeyPool
+								? 'bg-white text-gray-900 shadow-xs dark:bg-gray-700 dark:text-gray-100'
+								: 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'}"
+							on:click={() => setKeyMode('pool')}
 						>
-							<option value="none">{$i18n.t('None')}</option>
-							<option value="bearer">{$i18n.t('Bearer')}</option>
-
-							{#if !ollama}
-								<option value="session">{$i18n.t('Session')}</option>
-								{#if !direct}
-									<option value="system_oauth">{$i18n.t('OAuth')}</option>
-									<option value="microsoft_entra_id">{$i18n.t('Entra ID')}</option>
-								{/if}
-							{/if}
-						</select>
+							{$i18n.t('Key Pool')}
+						</button>
 					</div>
+				{/if}
 
-					<div>
-						<label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
-							{auth_type === 'bearer' ? $i18n.t('API Key') : $i18n.t('Details')}
-						</label>
-						<div class="flex min-h-9 items-center rounded-lg border border-gray-100 px-3 dark:border-gray-850">
-							{#if auth_type === 'bearer'}
-								<SensitiveInput bind:value={key} placeholder={$i18n.t('API Key')} required={false} />
-							{:else if auth_type === 'none'}
-								<div class="text-xs text-gray-500 dark:text-gray-400">{$i18n.t('No authentication')}</div>
-							{:else if auth_type === 'session'}
-								<div class="text-xs text-gray-500 dark:text-gray-400">
-									{$i18n.t('Forwards system user session credentials to authenticate')}
-								</div>
-							{:else if auth_type === 'system_oauth'}
-								<div class="text-xs text-gray-500 dark:text-gray-400">
-									{$i18n.t('Forwards system user OAuth access token to authenticate')}
-								</div>
-							{:else if ['azure_ad', 'microsoft_entra_id'].includes(auth_type)}
-								<div class="text-xs text-gray-500 dark:text-gray-400">
-									{$i18n.t('Uses DefaultAzureCredential to authenticate')}
-								</div>
-							{/if}
+				{#if !useKeyPool}
+					<div class="grid gap-3 md:grid-cols-[11rem_1fr]">
+						<div>
+							<label
+								for="select-bearer-or-session"
+								class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+								>{$i18n.t('Method')}</label
+							>
+							<select
+								id="select-bearer-or-session"
+								class="w-full rounded-lg border border-gray-100 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-850 dark:bg-gray-900"
+								bind:value={auth_type}
+							>
+								<option value="none">{$i18n.t('None')}</option>
+								<option value="bearer">{$i18n.t('Bearer')}</option>
+
+								{#if !ollama}
+									<option value="session">{$i18n.t('Session')}</option>
+									{#if !direct}
+										<option value="system_oauth">{$i18n.t('OAuth')}</option>
+										<option value="microsoft_entra_id">{$i18n.t('Entra ID')}</option>
+									{/if}
+								{/if}
+							</select>
+						</div>
+
+						<div>
+							<label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+								{auth_type === 'bearer' ? $i18n.t('API Key') : $i18n.t('Details')}
+							</label>
+							<div class="flex min-h-9 items-center rounded-lg border border-gray-100 px-3 dark:border-gray-850">
+								{#if auth_type === 'bearer'}
+									<SensitiveInput bind:value={key} placeholder={$i18n.t('API Key')} required={false} />
+								{:else if auth_type === 'none'}
+									<div class="text-xs text-gray-500 dark:text-gray-400">{$i18n.t('No authentication')}</div>
+								{:else if auth_type === 'session'}
+									<div class="text-xs text-gray-500 dark:text-gray-400">
+										{$i18n.t('Forwards system user session credentials to authenticate')}
+									</div>
+								{:else if auth_type === 'system_oauth'}
+									<div class="text-xs text-gray-500 dark:text-gray-400">
+										{$i18n.t('Forwards system user OAuth access token to authenticate')}
+									</div>
+								{:else if ['azure_ad', 'microsoft_entra_id'].includes(auth_type)}
+									<div class="text-xs text-gray-500 dark:text-gray-400">
+										{$i18n.t('Uses DefaultAzureCredential to authenticate')}
+									</div>
+								{/if}
+							</div>
 						</div>
 					</div>
-				</div>
+				{:else}
+					<div class="space-y-3">
+						<div class="grid gap-3 md:grid-cols-[11rem_1fr]">
+							<div>
+								<label
+									for="select-key-pool-method"
+									class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400"
+									>{$i18n.t('Method')}</label
+								>
+								<select
+									id="select-key-pool-method"
+									class="w-full rounded-lg border border-gray-100 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-850 dark:bg-gray-900"
+									bind:value={auth_type}
+								>
+									<option value="none">{$i18n.t('None')}</option>
+									<option value="bearer">{$i18n.t('Bearer')}</option>
+
+									{#if !ollama}
+										<option value="session">{$i18n.t('Session')}</option>
+										{#if !direct}
+											<option value="system_oauth">{$i18n.t('OAuth')}</option>
+											<option value="microsoft_entra_id">{$i18n.t('Entra ID')}</option>
+										{/if}
+									{/if}
+								</select>
+							</div>
+
+							<div>
+								<label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+									{auth_type === 'bearer' ? $i18n.t('API Key') : $i18n.t('Details')}
+								</label>
+								{#if auth_type === 'bearer'}
+									<div class="space-y-2">
+										{#each keyPoolKeys as poolKey, keyIdx}
+											<div class="flex items-center gap-2">
+												<div class="flex min-h-9 flex-1 items-center rounded-lg border border-gray-100 px-3 dark:border-gray-850">
+													<SensitiveInput
+														bind:value={keyPoolKeys[keyIdx]}
+														placeholder={$i18n.t('API Key')}
+														required={false}
+													/>
+												</div>
+
+												{#if keyIdx === 0}
+													<button
+														type="button"
+														class="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-gray-100 px-2.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 dark:border-gray-850 dark:text-gray-200 dark:hover:bg-gray-850"
+														on:click={addKeyPoolKey}
+													>
+														<Plus className="size-3.5" strokeWidth="2" />
+														<span>{$i18n.t('Add a key')}</span>
+													</button>
+												{:else}
+													<Tooltip content={$i18n.t('Remove key')}>
+														<button
+															type="button"
+															class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-100 text-gray-600 transition hover:bg-gray-50 dark:border-gray-850 dark:text-gray-300 dark:hover:bg-gray-850"
+															aria-label={$i18n.t('Remove key')}
+															on:click={() => {
+																removeKeyPoolKey(keyIdx);
+															}}
+														>
+															<Minus strokeWidth="2" className="size-3.5" />
+														</button>
+													</Tooltip>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<div class="flex min-h-9 items-center rounded-lg border border-gray-100 px-3 dark:border-gray-850">
+										{#if auth_type === 'none'}
+											<div class="text-xs text-gray-500 dark:text-gray-400">{$i18n.t('No authentication')}</div>
+										{:else if auth_type === 'session'}
+											<div class="text-xs text-gray-500 dark:text-gray-400">
+												{$i18n.t('Forwards system user session credentials to authenticate')}
+											</div>
+										{:else if auth_type === 'system_oauth'}
+											<div class="text-xs text-gray-500 dark:text-gray-400">
+												{$i18n.t('Forwards system user OAuth access token to authenticate')}
+											</div>
+										{:else if ['azure_ad', 'microsoft_entra_id'].includes(auth_type)}
+											<div class="text-xs text-gray-500 dark:text-gray-400">
+												{$i18n.t('Uses DefaultAzureCredential to authenticate')}
+											</div>
+										{/if}
+									</div>
+								{/if}
+							</div>
+						</div>
+
+						{#if auth_type === 'bearer'}
+							<div class="text-xs text-gray-500 dark:text-gray-400">
+								{keyPool.length > 0
+									? $i18n.t('{{COUNT}} key(s) ready', { COUNT: keyPool.length })
+									: $i18n.t('Add at least one key or switch back to Single Key.')}
+							</div>
+
+							<div class="grid gap-2 md:grid-cols-[13rem_1fr]">
+								<div>
+									<label for="key-strategy-select" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+										{$i18n.t('Use keys by')}
+									</label>
+									<select
+										id="key-strategy-select"
+										class="w-full rounded-lg border border-gray-100 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-850 dark:bg-gray-900"
+										bind:value={keyStrategy}
+									>
+										<option value="single">{$i18n.t('First key')}</option>
+										<option value="random">{$i18n.t('Random key')}</option>
+										<option value="sticky_until_failure">{$i18n.t('Same key until failure')}</option>
+										<option value="switch_each_message">{$i18n.t('Switch each message')}</option>
+									</select>
+								</div>
+
+								<div class="self-end rounded-lg bg-gray-50 p-2 text-xs text-gray-500 dark:bg-gray-850 dark:text-gray-400">
+									{#if keyStrategy === 'random'}
+										{$i18n.t('Every request picks a random key from the pool.')}
+									{:else if keyStrategy === 'sticky_until_failure'}
+										{$i18n.t('Requests keep using one key and move to the next after provider errors.')}
+									{:else if keyStrategy === 'switch_each_message'}
+										{$i18n.t('Requests rotate through the pool in order.')}
+									{:else}
+										{$i18n.t('Requests use the first available key.')}
+									{/if}
+								</div>
+							</div>
+						{/if}
+					</div>
+				{/if}
 			</section>
 
 			<section class="space-y-3 rounded-xl border border-gray-100 dark:border-gray-850 p-3">

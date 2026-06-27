@@ -4,7 +4,7 @@
 
 	import { toast } from 'svelte-sonner';
 
-	import { onMount, getContext, tick } from 'svelte';
+	import { onDestroy, onMount, getContext, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 
@@ -16,9 +16,10 @@
 		userSignUp,
 		updateUserTimezone
 	} from '$lib/apis/auths';
+	import { createModerationAppeal, getModerationBanStatus } from '$lib/apis/moderation';
 
 	import { WEBUI_BASE_URL } from '$lib/constants';
-	import { WEBUI_NAME, config, user, socket } from '$lib/stores';
+	import { WEBUI_NAME, activeSiteBan, config, user, socket } from '$lib/stores';
 
 	import { generateInitialsImage, getUserTimezone } from '$lib/utils';
 
@@ -26,6 +27,7 @@
 	import OnBoarding from '$lib/components/OnBoarding.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import UpdatePassword from '$lib/components/chat/Settings/Account/UpdatePassword.svelte';
+	import LockClosed from '$lib/components/icons/LockClosed.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -49,6 +51,153 @@
 	let showGuestNotification = false;
 	let guestNotificationTitle = '';
 	let guestNotificationDescription = '';
+	let banCountdown = '';
+	let banCountdownInterval: ReturnType<typeof setInterval> | null = null;
+	let checkingBanStatus = false;
+	let appealMessage = '';
+	let submittingAppeal = false;
+	let showAppealForm = false;
+
+	const SITE_BAN_STORAGE_KEY = 'awu.active_site_ban';
+
+	const cacheActiveSiteBan = (ban) => {
+		if (!ban) {
+			activeSiteBan.set(null);
+			localStorage.removeItem(SITE_BAN_STORAGE_KEY);
+			return;
+		}
+
+		activeSiteBan.set(ban);
+		localStorage.setItem(SITE_BAN_STORAGE_KEY, JSON.stringify(ban));
+	};
+
+	const restoreCachedSiteBan = () => {
+		const raw = localStorage.getItem(SITE_BAN_STORAGE_KEY);
+		if (!raw) {
+			return;
+		}
+
+		try {
+			const ban = JSON.parse(raw);
+			if (ban?.expires_at && Number(ban.expires_at) <= Math.floor(Date.now() / 1000)) {
+				cacheActiveSiteBan(null);
+				return;
+			}
+			activeSiteBan.set(ban);
+		} catch {
+			localStorage.removeItem(SITE_BAN_STORAGE_KEY);
+		}
+	};
+
+	const extractSiteBan = (error) => {
+		if (error?.code === 'moderation_site_ban') {
+			return error?.ban ?? null;
+		}
+		if (error?.detail?.code === 'moderation_site_ban') {
+			return error.detail?.ban ?? null;
+		}
+		return null;
+	};
+
+	const handleAuthError = (error) => {
+		const ban = extractSiteBan(error);
+		if (ban) {
+			cacheActiveSiteBan(ban);
+			localStorage.removeItem('token');
+			user.set(undefined);
+			return;
+		}
+		toast.error(`${error}`);
+	};
+
+	const formatBanExpiry = (expiresAt) => {
+		if (!expiresAt) {
+			return $i18n.t('never');
+		}
+		return new Date(Number(expiresAt) * 1000).toLocaleString();
+	};
+
+	const updateBanCountdown = () => {
+		const expiresAt = $activeSiteBan?.expires_at;
+		if (!expiresAt) {
+			banCountdown = $i18n.t('permanent');
+			return;
+		}
+
+		const remaining = Math.max(0, Number(expiresAt) - Math.floor(Date.now() / 1000));
+		if (remaining <= 0) {
+			cacheActiveSiteBan(null);
+			banCountdown = '';
+			return;
+		}
+
+		const days = Math.floor(remaining / 86400);
+		const hours = Math.floor((remaining % 86400) / 3600);
+		const minutes = Math.ceil((remaining % 3600) / 60);
+		banCountdown = [
+			days ? `${days}d` : '',
+			hours ? `${hours}h` : '',
+			minutes || (!days && !hours) ? `${minutes}m` : ''
+		]
+			.filter(Boolean)
+			.join(' ');
+	};
+
+	const syncBanStatus = async (showToast = false) => {
+		const banId = $activeSiteBan?.id;
+		if (!banId || checkingBanStatus) {
+			return;
+		}
+
+		checkingBanStatus = true;
+		const status = await getModerationBanStatus(banId).catch((error) => {
+			console.error(error);
+			return null;
+		});
+		checkingBanStatus = false;
+
+		if (status && !status.active) {
+			cacheActiveSiteBan(null);
+			if (showToast) {
+				toast.success($i18n.t('Your ban is no longer active. You can sign in again.'));
+			}
+			return;
+		}
+
+		if (status?.ban) {
+			cacheActiveSiteBan(status.ban);
+			updateBanCountdown();
+		}
+	};
+
+	const refreshBanStatus = async () => {
+		await syncBanStatus(true);
+	};
+
+	const submitAppeal = async () => {
+		const banId = $activeSiteBan?.id;
+		const message = appealMessage.trim();
+		if (!banId || submittingAppeal) {
+			return;
+		}
+		if (!message) {
+			toast.error($i18n.t('Appeal message is required.'));
+			return;
+		}
+
+		submittingAppeal = true;
+		const appeal = await createModerationAppeal(banId, message).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		submittingAppeal = false;
+
+		if (appeal) {
+			appealMessage = '';
+			showAppealForm = false;
+			toast.success($i18n.t('Appeal sent.'));
+		}
+	};
 
 	const evaluateGuestNotification = () => {
 		const enabled = Boolean($config?.ui?.system_notice?.enabled ?? false);
@@ -101,7 +250,7 @@
 
 	const completePasswordSetup = async () => {
 		const sessionUser = await getSessionUser(localStorage.token).catch((error) => {
-			toast.error(`${error}`);
+			handleAuthError(error);
 			return null;
 		});
 
@@ -117,7 +266,7 @@
 
 	const signInHandler = async () => {
 		const sessionUser = await userSignIn(email, password).catch((error) => {
-			toast.error(`${error}`);
+			handleAuthError(error);
 			return null;
 		});
 
@@ -139,7 +288,7 @@
 			generateInitialsImage(name),
 			inviteCode
 		).catch((error) => {
-			toast.error(`${error}`);
+			handleAuthError(error);
 			return null;
 		});
 
@@ -148,7 +297,7 @@
 
 	const ldapSignInHandler = async () => {
 		const sessionUser = await ldapUserSignIn(ldapUsername, password).catch((error) => {
-			toast.error(`${error}`);
+			handleAuthError(error);
 			return null;
 		});
 		await setSessionUser(sessionUser);
@@ -237,7 +386,7 @@
 		}
 
 		const sessionUser = await getSessionUser(token).catch((error) => {
-			toast.error(`${error}`);
+			handleAuthError(error);
 			return null;
 		});
 
@@ -275,6 +424,14 @@
 	}
 
 	onMount(async () => {
+		restoreCachedSiteBan();
+		updateBanCountdown();
+		void syncBanStatus(false);
+		banCountdownInterval = setInterval(() => {
+			updateBanCountdown();
+			void syncBanStatus(false);
+		}, 30000);
+
 		const redirectPath = $page.url.searchParams.get('redirect');
 		if ($user !== undefined) {
 			if (sessionNeedsPasswordSetup($user)) {
@@ -325,6 +482,12 @@
 			await signInHandler();
 		} else {
 			onboarding = $config?.onboarding ?? false;
+		}
+	});
+
+	onDestroy(() => {
+		if (banCountdownInterval) {
+			clearInterval(banCountdownInterval);
 		}
 	});
 </script>
@@ -405,6 +568,99 @@
 											onSuccess={completePasswordSetup}
 										/>
 									</div>
+								</div>
+							{:else if $activeSiteBan}
+								<div class="flex flex-col items-center justify-center text-center max-w-md mx-auto">
+									<div
+										class="mb-5 flex size-32 items-center justify-center rounded-2xl border border-gray-200 bg-gray-50 text-gray-700 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200"
+									>
+										<LockClosed className="size-14" />
+									</div>
+
+									<div class="text-2xl sm:text-3xl font-semibold text-gray-900 dark:text-gray-100">
+										{$i18n.t('Sorry, but you were banned.')}
+									</div>
+
+									<div class="mt-2 text-base font-medium text-gray-600 dark:text-gray-400">
+										{$i18n.t('You were banned from using this website by an administrator.')}
+									</div>
+
+									{#if $activeSiteBan?.reason}
+										<div
+											class="mt-5 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300"
+										>
+											<div class="text-xs uppercase tracking-wide text-gray-500">{$i18n.t('Reason')}</div>
+											<div class="mt-1 font-medium">{$activeSiteBan.reason}</div>
+										</div>
+									{/if}
+
+									<div class="mt-5 text-base font-semibold text-gray-900 dark:text-gray-100">
+										{$i18n.t('Your ban will expire on {{timestamp}}', {
+											timestamp: formatBanExpiry($activeSiteBan?.expires_at)
+										})}
+									</div>
+									<div class="mt-1 text-sm font-medium text-gray-500 dark:text-gray-400">
+										{$activeSiteBan?.expires_at
+											? $i18n.t('in {{countdown}}', { countdown: banCountdown })
+											: $i18n.t('This ban does not expire automatically.')}
+									</div>
+
+									<div class="mt-6 flex flex-wrap justify-center gap-2">
+										<button
+											class="rounded-xl border border-gray-300 px-7 py-3 text-sm font-semibold text-gray-800 transition hover:bg-gray-100 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-850"
+											type="button"
+											on:click={() => {
+												showAppealForm = !showAppealForm;
+											}}
+										>
+											{$i18n.t('Send appeal')}
+										</button>
+										<button
+											class="rounded-xl px-5 py-3 text-sm font-semibold text-gray-600 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-300 dark:hover:bg-gray-850"
+											type="button"
+											disabled={checkingBanStatus}
+											on:click={() => {
+												void refreshBanStatus();
+											}}
+										>
+											{checkingBanStatus ? $i18n.t('Checking') : $i18n.t('Check status')}
+										</button>
+									</div>
+
+									{#if showAppealForm}
+										<form
+											class="mt-4 w-full rounded-xl border border-gray-200 bg-gray-50 p-3 text-left dark:border-gray-800 dark:bg-gray-900"
+											on:submit|preventDefault={submitAppeal}
+										>
+											<label class="mb-1 block text-xs font-medium text-gray-500" for="ban-appeal">
+												{$i18n.t('Appeal message')}
+											</label>
+											<textarea
+												id="ban-appeal"
+												class="min-h-24 w-full resize-none bg-transparent text-sm outline-hidden"
+												bind:value={appealMessage}
+												placeholder={$i18n.t('Tell the admins why this should be reviewed.')}
+											></textarea>
+											<div class="mt-3 flex justify-end gap-2">
+												<button
+													class="rounded-full px-3 py-1.5 text-xs font-medium transition hover:bg-gray-100 dark:hover:bg-gray-850"
+													type="button"
+													on:click={() => {
+														showAppealForm = false;
+													}}
+												>
+													{$i18n.t('Cancel')}
+												</button>
+												<button
+													class="rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-gray-200"
+													type="submit"
+													disabled={submittingAppeal}
+												>
+													{submittingAppeal ? $i18n.t('Sending') : $i18n.t('Send')}
+												</button>
+											</div>
+										</form>
+									{/if}
 								</div>
 							{:else}
 								<form

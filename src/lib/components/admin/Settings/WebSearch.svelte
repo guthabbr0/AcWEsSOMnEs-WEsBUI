@@ -1030,6 +1030,26 @@
 							</Tooltip>
 						</div>
 					</div>
+
+					<div class="mb-2.5 flex w-full flex-col">
+						<div class="mb-1 text-xs font-medium">
+							<Tooltip
+								content={$i18n.t(
+									'Optional proxy URL used by web search engines and fetched search result pages.'
+								)}
+								placement="top-start"
+							>
+								{$i18n.t('Search Proxy URL')}
+							</Tooltip>
+						</div>
+						<input
+							class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
+							type="text"
+							placeholder={$i18n.t('Enter proxy URL (e.g. https://user:password@host:port)')}
+							bind:value={webConfig.WEB_SEARCH_PROXY_URL}
+							autocomplete="off"
+						/>
+					</div>
 				</div>
 
 				<div class="mb-3">

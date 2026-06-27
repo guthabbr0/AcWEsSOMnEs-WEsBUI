@@ -147,6 +147,10 @@ DEFAULT_REASONING_TAGS = [
 ]
 DEFAULT_SOLUTION_TAGS = [('<|begin_of_solution|>', '<|end_of_solution|>')]
 DEFAULT_CODE_INTERPRETER_TAGS = [('<code_interpreter>', '</code_interpreter>')]
+WEB_SEARCH_CONTEXT_PROMPT = """Web search is enabled and has already been performed for this turn.
+Use the provided web search context and citations when answering. Do not claim that you cannot browse, cannot search the web, or do not have internet access. If the search results are insufficient, say what is missing instead of denying that search was available."""
+WEB_SEARCH_TOOL_PROMPT = """Web search tools are available in this conversation.
+When the user asks for current, recent, or externally verifiable information, use the `search_web` tool before answering. You may use `fetch_url` to open a specific result. Do not claim that you cannot browse or search while these tools are available."""
 
 
 def output_id(prefix: str) -> str:
@@ -1493,12 +1497,14 @@ async def chat_memory_handler(request: Request, form_data: dict, extra_params: d
 
 async def chat_web_search_handler(request: Request, form_data: dict, extra_params: dict, user):
     event_emitter = extra_params['__event_emitter__']
+    search_started_at = time.time()
     await event_emitter(
         {
             'type': 'status',
             'data': {
                 'action': 'web_search',
-                'description': 'Searching the web',
+                'description': 'Generating search query',
+                'started_at': search_started_at,
                 'done': False,
             },
         }
@@ -1567,6 +1573,7 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
                 'data': {
                     'action': 'web_search',
                     'description': 'No search query generated',
+                    'started_at': search_started_at,
                     'done': True,
                 },
             }
@@ -1579,6 +1586,8 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
             'data': {
                 'action': 'web_search_queries_generated',
                 'queries': queries,
+                'description': 'Searching the web',
+                'started_at': search_started_at,
                 'done': False,
             },
         }
@@ -1620,6 +1629,12 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
 
             form_data['files'] = files
 
+            form_data['messages'] = add_or_update_system_message(
+                WEB_SEARCH_CONTEXT_PROMPT,
+                form_data['messages'],
+                append=True,
+            )
+
             await event_emitter(
                 {
                     'type': 'status',
@@ -1628,6 +1643,8 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
                         'description': 'Searched {{count}} sites',
                         'urls': results['filenames'],
                         'items': results.get('items', []),
+                        'queries': queries,
+                        'started_at': search_started_at,
                         'done': True,
                     },
                 }
@@ -1639,6 +1656,8 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
                     'data': {
                         'action': 'web_search',
                         'description': 'No search results found',
+                        'queries': queries,
+                        'started_at': search_started_at,
                         'done': True,
                         'error': True,
                     },
@@ -1654,6 +1673,7 @@ async def chat_web_search_handler(request: Request, form_data: dict, extra_param
                     'action': 'web_search',
                     'description': 'An error occurred while searching the web',
                     'queries': queries,
+                    'started_at': search_started_at,
                     'done': True,
                     'error': True,
                 },
@@ -2860,6 +2880,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             for name, tool_dict in builtin_tools.items():
                 if name not in tools_dict:
                     tools_dict[name] = tool_dict
+
+            if 'search_web' in tools_dict:
+                form_data['messages'] = add_or_update_system_message(
+                    WEB_SEARCH_TOOL_PROMPT,
+                    form_data['messages'],
+                    append=True,
+                )
 
         if tools_dict:
             # Always store resolved tools in metadata so downstream consumers

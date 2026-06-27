@@ -1048,12 +1048,17 @@
 					/>
 				</a>
 
-				<a href="/" class="flex flex-1 px-0.5" on:click={newChatHandler}>
-					<div
-						id="sidebar-webui-name"
-						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
-					>
-						{$WEBUI_NAME}
+				<a href="/" class="flex min-w-0 flex-1 px-0.5" on:click={newChatHandler}>
+					<div class="self-center min-w-0 leading-tight font-primary">
+						<div
+							id="sidebar-webui-name"
+							class="truncate font-medium text-gray-850 dark:text-white"
+						>
+							{$WEBUI_NAME}
+						</div>
+						<div class="truncate text-[10px] leading-3 text-gray-500 dark:text-gray-500">
+							Powered by Open WebUI
+						</div>
 					</div>
 				</a>
 				<Tooltip

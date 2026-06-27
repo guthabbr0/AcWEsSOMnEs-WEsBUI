@@ -87,6 +87,14 @@
 
 						<a
 							draggable="false"
+							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/moderation')
+								? ''
+								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
+							href="/admin/moderation">{$i18n.t('Moderation')}</a
+						>
+
+						<a
+							draggable="false"
 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/functions')
 								? ''
 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
@@ -98,7 +106,7 @@
 							class="min-w-fit p-1.5 {$page.url.pathname.includes('/admin/awesome-webui')
 								? ''
 								: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
-							href="/admin/awesome-webui">{$i18n.t('Awesome WebUI')}</a
+							href="/admin/awesome-webui/authorization">{$i18n.t('Awesome WebUI')}</a
 						>
 
 						<a

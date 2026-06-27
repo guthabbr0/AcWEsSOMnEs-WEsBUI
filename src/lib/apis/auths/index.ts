@@ -16,7 +16,7 @@ export const getAdminDetails = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -43,7 +43,7 @@ export const getAdminConfig = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -71,7 +71,62 @@ export const updateAdminConfig = async (token: string, body: object) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const exportAdminConfigBackup = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/auths/admin/config/backup`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail ?? err;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const importAdminConfigBackup = async (token: string, body: object) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/auths/admin/config/backup`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(body)
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -99,7 +154,7 @@ export const getSessionUser = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -131,7 +186,7 @@ export const ldapUserSignIn = async (user: string, password: string) => {
 		.catch((err) => {
 			console.error(err);
 
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -158,7 +213,7 @@ export const getLdapConfig = async (token: string = '') => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -188,7 +243,7 @@ export const updateLdapConfig = async (token: string = '', enable_ldap: boolean)
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -215,7 +270,7 @@ export const getLdapServer = async (token: string = '') => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -243,7 +298,7 @@ export const updateLdapServer = async (token: string = '', body: object) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -275,7 +330,7 @@ export const userSignIn = async (email: string, password: string) => {
 		.catch((err) => {
 			console.error(err);
 
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -315,7 +370,7 @@ export const userSignUp = async (
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -342,7 +397,7 @@ export const getInviteCodes = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -369,7 +424,7 @@ export const createInviteCode = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -396,7 +451,7 @@ export const deleteInviteCode = async (token: string, inviteId: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -423,7 +478,7 @@ export const userSignOut = async () => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -465,7 +520,7 @@ export const addUser = async (
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -495,7 +550,7 @@ export const updateUserProfile = async (token: string, profile: object) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			if (Array.isArray(error)) {
 				error = error.map((e: { msg?: string }) => e.msg).join('; ');
 			}
@@ -546,7 +601,7 @@ export const updateUserPassword = async (
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 
@@ -573,7 +628,7 @@ export const createAPIKey = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 	if (error) {
@@ -598,7 +653,7 @@ export const getAPIKey = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 	if (error) {
@@ -623,7 +678,7 @@ export const deleteAPIKey = async (token: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 	if (error) {
@@ -651,7 +706,7 @@ export const deleteOAuthSession = async (token: string, provider: string) => {
 		})
 		.catch((err) => {
 			console.error(err);
-			error = err.detail;
+			error = err.detail ?? err;
 			return null;
 		});
 

@@ -4,9 +4,11 @@
 
 	import { getBackendConfig, getVersionUpdates, getWebhookUrl, updateWebhookUrl } from '$lib/apis';
 	import {
+		exportAdminConfigBackup,
 		getAdminConfig,
 		getLdapConfig,
 		getLdapServer,
+		importAdminConfigBackup,
 		updateAdminConfig,
 		updateLdapConfig,
 		updateLdapServer
@@ -45,6 +47,7 @@
 	let adminConfig = null;
 	let webhookUrl = '';
 	let groups = [];
+	let importingConfig = false;
 
 	let banners: Banner[] = [];
 
@@ -109,6 +112,52 @@
 			saveHandler();
 		} else {
 			toast.error($i18n.t('Failed to update settings'));
+		}
+	};
+
+	const exportConfigBackup = async () => {
+		const backup = await exportAdminConfigBackup(localStorage.token).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		if (!backup) return;
+
+		const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const anchor = document.createElement('a');
+		anchor.href = url;
+		anchor.download = `awesome-webui-config-${new Date().toISOString().slice(0, 10)}.json`;
+		anchor.click();
+		URL.revokeObjectURL(url);
+	};
+
+	const importConfigBackup = async (event) => {
+		const file = event?.target?.files?.[0];
+		if (!file || importingConfig) return;
+
+		importingConfig = true;
+		let payload = null;
+		try {
+			const text = await file.text();
+			payload = JSON.parse(text);
+		} catch (error) {
+			toast.error($i18n.t('Invalid config backup file'));
+			importingConfig = false;
+			event.target.value = '';
+			return;
+		}
+		const res = await importAdminConfigBackup(localStorage.token, payload).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+		importingConfig = false;
+		event.target.value = '';
+
+		if (res) {
+			adminConfig = res;
+			await config.set(await getBackendConfig());
+			toast.success($i18n.t('Config backup imported'));
+			saveHandler();
 		}
 	};
 
@@ -339,6 +388,25 @@
 									<option value={group.id}>{group.name}</option>
 								{/each}
 							</select>
+						</div>
+					</div>
+
+					<div class="mb-3 rounded-xl border border-gray-100 p-3 dark:border-gray-850">
+						<div class="mb-2 text-xs font-medium">{$i18n.t('Config Backup')}</div>
+						<div class="flex flex-wrap gap-2">
+							<button
+								type="button"
+								class="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium transition hover:bg-gray-200 dark:bg-gray-850 dark:hover:bg-gray-800"
+								on:click={exportConfigBackup}
+							>
+								{$i18n.t('Export')}
+							</button>
+							<label
+								class="cursor-pointer rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium transition hover:bg-gray-200 dark:bg-gray-850 dark:hover:bg-gray-800"
+							>
+								<input class="hidden" type="file" accept="application/json" on:change={importConfigBackup} />
+								{importingConfig ? $i18n.t('Importing') : $i18n.t('Import')}
+							</label>
 						</div>
 					</div>
 

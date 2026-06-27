@@ -1,4 +1,55 @@
 import re
+from typing import Optional
+
+from open_webui.models.access_grants import (
+    AccessGrants,
+    has_public_write_access_grant,
+    normalize_access_grants,
+)
+from open_webui.models.channels import ChannelModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def channel_has_access(
+    user_id: str,
+    channel: ChannelModel,
+    permission: str = 'read',
+    strict: bool = True,
+    db: Optional[AsyncSession] = None,
+) -> bool:
+    if await AccessGrants.has_access(
+        user_id=user_id,
+        resource_type='channel',
+        resource_id=channel.id,
+        permission=permission,
+        db=db,
+    ):
+        return True
+
+    if not strict and permission == 'write' and has_public_write_access_grant(channel.access_grants):
+        return True
+
+    return False
+
+
+def channel_has_explicit_write_policy(channel: ChannelModel) -> bool:
+    return any(grant.get('permission') == 'write' for grant in normalize_access_grants(channel.access_grants))
+
+
+async def channel_has_write_access(
+    user_id: str,
+    channel: ChannelModel,
+    db: Optional[AsyncSession] = None,
+) -> bool:
+    if await channel_has_access(user_id, channel, permission='write', strict=False, db=db):
+        return True
+
+    # Awesome WebUI compatibility: public/readable standard channels are chatty by
+    # default unless the channel owner added an explicit write policy.
+    if not channel_has_explicit_write_policy(channel):
+        return await channel_has_access(user_id, channel, permission='read', db=db)
+
+    return False
 
 
 def extract_mentions(message: str, triggerChar: str = '@'):

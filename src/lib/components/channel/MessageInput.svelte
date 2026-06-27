@@ -274,6 +274,12 @@
 		chatInputElement?.replaceCommandWithText(text);
 	};
 
+	const normalizeEmojiShortCode = (value: unknown) =>
+		String(value ?? '')
+			.trim()
+			.replace(/^:+|:+$/g, '')
+			.toLowerCase();
+
 	const insertTextAtCursor = async (text: string) => {
 		const chatInput = document.getElementById('chat-input');
 		if (!chatInput) return;
@@ -668,7 +674,16 @@
 				: []),
 			{
 				char: ':',
-				allow: (props) => String(props?.query ?? '').length > 0,
+				allowSpaces: false,
+				shouldShow: ({ query }) => /^[a-zA-Z0-9_+\-]+$/.test(String(query ?? '')),
+				command: ({ editor, range, props }) => {
+					const shortCode = normalizeEmojiShortCode(props?.id ?? props?.label ?? '');
+					if (!shortCode) {
+						return;
+					}
+
+					editor.chain().focus().insertContentAt(range, `:${shortCode}: `).run();
+				},
 				render: getSuggestionRenderer(EmojiSuggestionList, {
 					i18n,
 					insertTextHandler: insertTextAtCursor
